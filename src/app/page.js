@@ -5,11 +5,34 @@ import { Home, DollarSign, Mail, Search, Moon, Sun } from 'lucide-react';
 export default function Dashboard() {
   const [darkMode, setDarkMode] = useState(false);
   const [expandedIds, setExpandedIds] = useState([]); // <-- new: track expanded rows
-  const [properties] = useState([
+  const [properties, setProperties] = useState([
     { id: 1, address: "123 Maple Ave", status: "Active", price: 450, agent: "Sarah Smith" },
     { id: 2, address: "888 Ocean Blvd", status: "Sold", price: 600, agent: "John Doe" },
     { id: 3, address: "45 Pine St", status: "Pending", price: 350, agent: "Sarah Smith" },
   ]);
+
+  // Customers example data (will be replaced by MySQL later)
+  const [customers, setCustomers] = useState([
+    { id: 1, name: "Sarah Smith", email: "sarah@example.com", phone: "555-1234", company: "Sarah Photo" },
+    { id: 2, name: "John Doe", email: "john@example.com", phone: "555-5678", company: "JD Real Estate" },
+    { id: 3, name: "Acme Rentals", email: "contact@acmerentals.com", phone: "555-9012", company: "Acme Rentals" },
+  ]);
+
+  // UI state
+  const [selectedTab, setSelectedTab] = useState('dashboard');
+
+  // Form state (add shoot)
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({
+    address: "",
+    status: "Active",
+    price: "",
+    agent: ""
+  });
+
+  // Customer edit state
+  const [editingCustomer, setEditingCustomer] = useState(null);
+  const [showCustomerEditor, setShowCustomerEditor] = useState(false);
 
   // Toggle function
   const toggleDarkMode = () => setDarkMode(!darkMode);
@@ -27,6 +50,91 @@ export default function Dashboard() {
     alert(`Emailing escrow for ${prop.address}`);
   };
 
+  const openForm = () => {
+    setForm({ address: "", status: "Active", price: "", agent: "" });
+    setShowForm(true);
+  };
+
+  const closeForm = () => setShowForm(false);
+
+  const handleFormChange = (e) => {
+    const { name, value } = e.target;
+    setForm(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleAddProperty = (e) => {
+    e.preventDefault();
+    // Basic validation
+    if (!form.address.trim()) return alert("Address is required");
+    const priceNum = parseFloat(form.price) || 0;
+    const newId = properties.length ? Math.max(...properties.map(p => p.id)) + 1 : 1;
+    const agentName = form.agent.trim() || "Unknown";
+    const newProp = {
+      id: newId,
+      address: form.address.trim(),
+      status: form.status,
+      price: priceNum,
+      agent: agentName
+    };
+
+    // Add property
+    setProperties(prev => [newProp, ...prev]);
+
+    // Add customer when agent provided (skip adding "Unknown" as a customer)
+    if (form.agent.trim()) {
+      const exists = customers.some(c => c.name.toLowerCase() === agentName.toLowerCase());
+      if (!exists) {
+        const newCustomerId = customers.length ? Math.max(...customers.map(c => c.id)) + 1 : 1;
+        const newCustomer = {
+          id: newCustomerId,
+          name: agentName,
+          email: "",
+          phone: "",
+          company: ""
+        };
+        setCustomers(prev => [newCustomer, ...prev]);
+      }
+    }
+
+    setShowForm(false);
+  };
+
+  // Customer editing handlers
+  const openEditCustomer = (customer) => {
+    setEditingCustomer({ ...customer }); // clone
+    setShowCustomerEditor(true);
+  };
+
+  const closeEditCustomer = () => {
+    setEditingCustomer(null);
+    setShowCustomerEditor(false);
+  };
+
+  const handleCustomerChange = (e) => {
+    const { name, value } = e.target;
+    setEditingCustomer(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleSaveCustomer = (e) => {
+    e.preventDefault();
+    if (!editingCustomer || !editingCustomer.name.trim()) {
+      return alert("Customer name is required");
+    }
+    setCustomers(prev => prev.map(c => c.id === editingCustomer.id ? {
+      ...c,
+      name: editingCustomer.name.trim(),
+      email: (editingCustomer.email || "").trim(),
+      phone: (editingCustomer.phone || "").trim(),
+      company: (editingCustomer.company || "").trim()
+    } : c));
+    closeEditCustomer();
+  };
+
+  const handleDeleteCustomer = (customerId) => {
+    if (!confirm("Delete this customer?")) return;
+    setCustomers(prev => prev.filter(c => c.id !== customerId));
+  };
+
   return (
     // This wrapper div now switches classes based on darkMode state
     <div className={`${darkMode ? 'dark' : ''}`}>
@@ -38,7 +146,22 @@ export default function Dashboard() {
             <Home size={24} /> Green Tree
           </h1>
           <nav className="space-y-4">
-            <a href="#" className="flex items-center gap-3 text-blue-600 dark:text-blue-400 font-medium"><Home size={20}/> Dashboard</a>
+            <a
+              href="#"
+              onClick={(e) => { e.preventDefault(); setSelectedTab('dashboard'); }}
+              className={`flex items-center gap-3 ${selectedTab === 'dashboard' ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-slate-500 dark:text-slate-400 hover:text-blue-600'}`}
+            >
+              <Home size={20}/> Dashboard
+            </a>
+
+            <a
+              href="#"
+              onClick={(e) => { e.preventDefault(); setSelectedTab('customers'); }}
+              className={`flex items-center gap-3 ${selectedTab === 'customers' ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-slate-500 dark:text-slate-400 hover:text-blue-600'}`}
+            >
+              <DollarSign size={20}/> Customers
+            </a>
+
             <a href="#" className="flex items-center gap-3 text-slate-500 dark:text-slate-400 hover:text-blue-600"><Search size={20}/> Watcher</a>
             
             {/* DARK MODE TOGGLE BUTTON */}
@@ -56,98 +179,324 @@ export default function Dashboard() {
         <main className="flex-1 p-10">
           <header className="flex justify-between items-center mb-10">
             <div>
-              <h2 className="text-3xl font-bold">Main Dashboard</h2>
-              <p className="text-slate-500 dark:text-slate-400">Manage your real estate photography escrow.</p>
+              <h2 className="text-3xl font-bold">
+                {selectedTab === 'dashboard' ? 'Main Dashboard' : 'Customer Database'}
+              </h2>
+              <p className="text-slate-500 dark:text-slate-400">
+                {selectedTab === 'dashboard'
+                  ? 'Manage your real estate photography escrow.'
+                  : 'Example customer records. Will be connected to MySQL later.'}
+              </p>
             </div>
-            <button className="bg-blue-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-blue-700">
-              + Add New Shoot
-            </button>
+
+            {selectedTab === 'dashboard' ? (
+              <button
+                onClick={openForm}
+                className="bg-blue-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-blue-700"
+              >
+                + Add New Shoot
+              </button>
+            ) : null}
           </header>
 
-          {/* STATS CARDS */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
-            <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700">
-              <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold text-green-600">READY TO BILL</p>
-              <p className="text-3xl font-bold mt-2">$600.00</p>
-            </div>
-          </div>
+          {selectedTab === 'dashboard' ? (
+            <>
+              {/* STATS CARDS */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
+                <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700">
+                  <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold text-green-600">READY TO BILL</p>
+                  <p className="text-3xl font-bold mt-2">$600.00</p>
+                </div>
+              </div>
 
-          {/* TABLE */}
-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
-            <table className="w-full">
-              <thead className="bg-slate-50 dark:bg-slate-700/50 text-slate-500 dark:text-slate-400 text-sm">
-                <tr>
-                  <th className="p-4 text-left font-medium">Address</th>
-                  <th className="p-4 text-left font-medium">Status</th>
-                  <th className="p-4 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y dark:divide-slate-700">
-                {properties.map((prop) => (
-                  <React.Fragment key={prop.id}>
-                    <tr
-                      onClick={() => toggleExpand(prop.id)}
-                      className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition cursor-pointer"
-                      aria-expanded={expandedIds.includes(prop.id)}
-                    >
-                      <td className="p-4 font-medium">{prop.address}</td>
-                      <td className="p-4">
-                        <span className={`px-3 py-1 rounded-full text-xs font-bold ${
-                          prop.status === 'Sold' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
-                        }`}>
-                          {prop.status}
-                        </span>
-                      </td>
-                      <td className="p-4 text-right">
-                        {prop.status === 'Sold' && (
-                          <button
-                            onClick={(e) => handleEmailEscrow(e, prop)}
-                            className="bg-green-600 text-white px-4 py-1 rounded-md text-sm"
-                          >
-                            Email Escrow
-                          </button>
-                        )}
-                      </td>
+              {/* TABLE */}
+              <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
+                <table className="w-full">
+                  <thead className="bg-slate-50 dark:bg-slate-700/50 text-slate-500 dark:text-slate-400 text-sm">
+                    <tr>
+                      <th className="p-4 text-left font-medium">Address</th>
+                      <th className="p-4 text-left font-medium">Status</th>
+                      <th className="p-4 text-right">Action</th>
                     </tr>
-
-                    {/* DETAILS ROW */}
-                    {expandedIds.includes(prop.id) && (
-                      <tr key={`${prop.id}-details`} className="bg-slate-50 dark:bg-slate-800">
-                        <td colSpan="3" className="p-4 text-sm text-slate-700 dark:text-slate-300">
-                          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                            <div>
-                              <p className="text-xs text-slate-500 dark:text-slate-400">Price</p>
-                              <p className="font-medium">${prop.price.toFixed(2)}</p>
-                            </div>
-                            <div>
-                              <p className="text-xs text-slate-500 dark:text-slate-400">Agent</p>
-                              <p className="font-medium">{prop.agent}</p>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              <button
-                                onClick={(e) => { e.stopPropagation(); /* TODO: view details */ }}
-                                className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm"
-                              >
-                                View
-                              </button>
+                  </thead>
+                  <tbody className="divide-y dark:divide-slate-700">
+                    {properties.map((prop) => (
+                      <React.Fragment key={prop.id}>
+                        <tr
+                          onClick={() => toggleExpand(prop.id)}
+                          className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition cursor-pointer"
+                          aria-expanded={expandedIds.includes(prop.id)}
+                        >
+                          <td className="p-4 font-medium">{prop.address}</td>
+                          <td className="p-4">
+                            <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                              prop.status === 'Sold' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+                            }`}>
+                              {prop.status}
+                            </span>
+                          </td>
+                          <td className="p-4 text-right">
+                            {prop.status === 'Sold' && (
                               <button
                                 onClick={(e) => handleEmailEscrow(e, prop)}
-                                className="px-4 py-2 bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-slate-100 rounded-md text-sm flex items-center gap-2"
+                                className="bg-green-600 text-white px-4 py-1 rounded-md text-sm"
                               >
-                                <Mail size={16} /> Email Escrow
+                                Email Escrow
                               </button>
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                            )}
+                          </td>
+                        </tr>
+
+                        {/* DETAILS ROW */}
+                        {expandedIds.includes(prop.id) && (
+                          <tr key={`${prop.id}-details`} className="bg-slate-50 dark:bg-slate-800">
+                            <td colSpan="3" className="p-4 text-sm text-slate-700 dark:text-slate-300">
+                              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                                <div>
+                                  <p className="text-xs text-slate-500 dark:text-slate-400">Price</p>
+                                  <p className="font-medium">${prop.price.toFixed(2)}</p>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-slate-500 dark:text-slate-400">Agent</p>
+                                  <p className="font-medium">{prop.agent}</p>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); /* TODO: view details */ }}
+                                    className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm"
+                                  >
+                                    View
+                                  </button>
+                                  <button
+                                    onClick={(e) => handleEmailEscrow(e, prop)}
+                                    className="px-4 py-2 bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-slate-100 rounded-md text-sm flex items-center gap-2"
+                                  >
+                                    <Mail size={16} /> Email Escrow
+                                  </button>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : (
+            /* CUSTOMERS TAB */
+            <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
+              <table className="w-full">
+                <thead className="bg-slate-50 dark:bg-slate-700/50 text-slate-500 dark:text-slate-400 text-sm">
+                  <tr>
+                    <th className="p-4 text-left font-medium">Name</th>
+                    <th className="p-4 text-left font-medium">Email</th>
+                    <th className="p-4 text-left font-medium">Phone</th>
+                    <th className="p-4 text-left font-medium">Company</th>
+                    <th className="p-4 text-right font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y dark:divide-slate-700">
+                  {customers.map(c => (
+                    <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition">
+                      <td className="p-4 font-medium">{c.name}</td>
+                      <td className="p-4 text-slate-600 dark:text-slate-300">{c.email}</td>
+                      <td className="p-4 text-slate-600 dark:text-slate-300">{c.phone}</td>
+                      <td className="p-4 text-slate-600 dark:text-slate-300">{c.company}</td>
+                      <td className="p-4 text-right">
+                        <div className="inline-flex gap-2">
+                          <button
+                            onClick={() => openEditCustomer(c)}
+                            className="px-3 py-1 bg-blue-600 text-white rounded-md text-sm"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => handleDeleteCustomer(c.id)}
+                            className="px-3 py-1 bg-red-500 text-white rounded-md text-sm"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </main>
       </div>
+
+      {/* FORM MODAL (Add Shoot) */}
+      {showForm && (
+        <div
+          className="fixed inset-0 flex items-center justify-center z-50"
+          onClick={closeForm}
+        >
+          <div className="absolute inset-0 bg-black/40" />
+          <form
+            onSubmit={handleAddProperty}
+            onClick={(e) => e.stopPropagation()}
+            className="relative bg-white dark:bg-slate-800 rounded-lg p-6 w-full max-w-md shadow-lg z-10"
+          >
+            <h3 className="text-xl font-bold mb-4">Add New Shoot</h3>
+
+            <label className="block mb-2 text-sm">
+              <span className="text-slate-600 dark:text-slate-300">Address</span>
+              <input
+                name="address"
+                value={form.address}
+                onChange={handleFormChange}
+                className="mt-1 block w-full rounded-md border px-3 py-2 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100"
+                required
+              />
+            </label>
+
+            <label className="block mb-2 text-sm">
+              <span className="text-slate-600 dark:text-slate-300">Status</span>
+              <select
+                name="status"
+                value={form.status}
+                onChange={handleFormChange}
+                className="mt-1 block w-full rounded-md border px-3 py-2 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100"
+              >
+                <option>Active</option>
+                <option>Pending</option>
+                <option>Sold</option>
+              </select>
+            </label>
+
+            <label className="block mb-2 text-sm">
+              <span className="text-slate-600 dark:text-slate-300">Price</span>
+              <input
+                name="price"
+                value={form.price}
+                onChange={handleFormChange}
+                type="number"
+                step="0.01"
+                className="mt-1 block w-full rounded-md border px-3 py-2 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100"
+              />
+            </label>
+
+            <label className="block mb-4 text-sm">
+              <span className="text-slate-600 dark:text-slate-300">Agent</span>
+              <input
+                name="agent"
+                value={form.agent}
+                onChange={handleFormChange}
+                className="mt-1 block w-full rounded-md border px-3 py-2 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100"
+              />
+            </label>
+
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={closeForm}
+                className="px-4 py-2 rounded-md bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-slate-100"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 rounded-md bg-blue-600 text-white"
+              >
+                Add
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* CUSTOMER EDITOR MODAL */}
+      {showCustomerEditor && editingCustomer && (
+        <div
+          className="fixed inset-0 flex items-center justify-center z-50"
+          onClick={closeEditCustomer}
+        >
+          <div className="absolute inset-0 bg-black/40" />
+          <form
+            onSubmit={handleSaveCustomer}
+            onClick={(e) => e.stopPropagation()}
+            className="relative bg-white dark:bg-slate-800 rounded-lg p-6 w-full max-w-md shadow-lg z-10"
+          >
+            <h3 className="text-xl font-bold mb-4">Edit Customer</h3>
+
+            <label className="block mb-2 text-sm">
+              <span className="text-slate-600 dark:text-slate-300">Name</span>
+              <input
+                name="name"
+                value={editingCustomer.name}
+                onChange={handleCustomerChange}
+                className="mt-1 block w-full rounded-md border px-3 py-2 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100"
+                required
+              />
+            </label>
+
+            <label className="block mb-2 text-sm">
+              <span className="text-slate-600 dark:text-slate-300">Email</span>
+              <input
+                name="email"
+                value={editingCustomer.email}
+                onChange={handleCustomerChange}
+                className="mt-1 block w-full rounded-md border px-3 py-2 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100"
+              />
+            </label>
+
+            <label className="block mb-2 text-sm">
+              <span className="text-slate-600 dark:text-slate-300">Phone</span>
+              <input
+                name="phone"
+                value={editingCustomer.phone}
+                onChange={handleCustomerChange}
+                className="mt-1 block w-full rounded-md border px-3 py-2 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100"
+              />
+            </label>
+
+            <label className="block mb-4 text-sm">
+              <span className="text-slate-600 dark:text-slate-300">Company</span>
+              <input
+                name="company"
+                value={editingCustomer.company}
+                onChange={handleCustomerChange}
+                className="mt-1 block w-full rounded-md border px-3 py-2 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100"
+              />
+            </label>
+
+            <div className="flex justify-between items-center gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  if (confirm("Delete this customer?")) {
+                    handleDeleteCustomer(editingCustomer.id);
+                    closeEditCustomer();
+                  }
+                }}
+                className="px-4 py-2 rounded-md bg-red-500 text-white"
+              >
+                Delete
+              </button>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={closeEditCustomer}
+                  className="px-4 py-2 rounded-md bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-slate-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-md bg-blue-600 text-white"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
