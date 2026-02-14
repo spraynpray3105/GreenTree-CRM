@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useEffect } from 'react';
-import { Home, DollarSign, Mail, Search, Moon, Sun } from 'lucide-react';
+import { Home, DollarSign, Mail, Search, Moon, Sun, BarChart } from 'lucide-react';
 
 export default function Dashboard() {
   const [darkMode, setDarkMode] = useState(false);
@@ -33,6 +33,12 @@ export default function Dashboard() {
   // Customer edit state
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [showCustomerEditor, setShowCustomerEditor] = useState(false);
+
+  // Fake statistics (placeholder until real DB/analytics)
+  const fakeStats = {
+    avgIncomePerMonth: 4200, // $ / month
+    avgListingDays: 18 // days
+  };
 
   // Toggle function
   const toggleDarkMode = () => setDarkMode(!darkMode);
@@ -162,6 +168,14 @@ export default function Dashboard() {
               <DollarSign size={20}/> Customers
             </a>
 
+            <a
+              href="#"
+              onClick={(e) => { e.preventDefault(); setSelectedTab('statistics'); }}
+              className={`flex items-center gap-3 ${selectedTab === 'statistics' ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-slate-500 dark:text-slate-400 hover:text-blue-600'}`}
+            >
+              <BarChart size={20}/> Statistics
+            </a>
+
             <a href="#" className="flex items-center gap-3 text-slate-500 dark:text-slate-400 hover:text-blue-600"><Search size={20}/> Watcher</a>
             
             {/* DARK MODE TOGGLE BUTTON */}
@@ -180,12 +194,14 @@ export default function Dashboard() {
           <header className="flex justify-between items-center mb-10">
             <div>
               <h2 className="text-3xl font-bold">
-                {selectedTab === 'dashboard' ? 'Main Dashboard' : 'Customer Database'}
+                {selectedTab === 'dashboard' ? 'Main Dashboard' : selectedTab === 'customers' ? 'Customer Database' : 'Statistics'}
               </h2>
               <p className="text-slate-500 dark:text-slate-400">
                 {selectedTab === 'dashboard'
                   ? 'Manage your real estate photography escrow.'
-                  : 'Example customer records. Will be connected to MySQL later.'}
+                  : selectedTab === 'customers'
+                  ? 'Example customer records. Will be connected to MySQL later.'
+                  : 'Summary statistics (fake data for now).'}
               </p>
             </div>
 
@@ -199,7 +215,8 @@ export default function Dashboard() {
             ) : null}
           </header>
 
-          {selectedTab === 'dashboard' ? (
+          {/* DASHBOARD */}
+          {selectedTab === 'dashboard' && (
             <>
               {/* STATS CARDS */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
@@ -284,8 +301,10 @@ export default function Dashboard() {
                 </table>
               </div>
             </>
-          ) : (
-            /* CUSTOMERS TAB */
+          )}
+
+          {/* CUSTOMERS */}
+          {selectedTab === 'customers' && (
             <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
               <table className="w-full">
                 <thead className="bg-slate-50 dark:bg-slate-700/50 text-slate-500 dark:text-slate-400 text-sm">
@@ -324,6 +343,28 @@ export default function Dashboard() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {/* STATISTICS */}
+          {selectedTab === 'statistics' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700">
+                <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">AVG INCOME / MONTH</p>
+                <p className="text-4xl font-bold mt-3">${fakeStats.avgIncomePerMonth.toLocaleString()}</p>
+                <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Sample average monthly income (fake data)</p>
+              </div>
+
+              <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700">
+                <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">AVG LISTING TIME</p>
+                <p className="text-4xl font-bold mt-3">{fakeStats.avgListingDays} days</p>
+                <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Average time a listing stays active (fake data)</p>
+              </div>
+
+              <div className="md:col-span-2 bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700">
+                <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">NOTES</p>
+                <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">These statistics are placeholders. We'll hook real analytics / DB queries later to populate accurate metrics.</p>
+              </div>
             </div>
           )}
         </main>
