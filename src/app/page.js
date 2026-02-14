@@ -16,7 +16,7 @@ export default function Dashboard() {
       {/* SIDEBAR */}
       <aside className="w-64 bg-white border-r p-6 space-y-8">
         <h1 className="text-xl font-bold text-blue-600 flex items-center gap-2">
-          <Home size={24} /> EscrowGuard
+          <Home size={24} /> Green Tree CRM
         </h1>
         <nav className="space-y-4">
           <a href="#" className="flex items-center gap-3 text-blue-600 font-medium"><Home size={20}/> Dashboard</a>
@@ -33,7 +33,7 @@ export default function Dashboard() {
             <p className="text-slate-500">Welcome back, here is your escrow status.</p>
           </div>
           <button className="bg-blue-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-blue-700 transition">
-            + Add New Shoot
+            + Add Customer
           </button>
         </header>
 
