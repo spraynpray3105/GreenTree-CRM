@@ -3,6 +3,59 @@ import React, { useState, useEffect } from 'react';
 import { Home, DollarSign, Mail, Search, Moon, Sun, BarChart, Menu, X } from 'lucide-react';
 
 export default function Dashboard() {
+  // Theme / class variables — tweak these at the top to change the app look
+  const THEME = {
+    // overall page
+    page: "flex min-h-screen bg-slate-50 dark:bg-[#1C1C1C] text-slate-900 dark:text-slate-100 transition-colors duration-300",
+
+    // Header
+    headerMobile: "md:hidden fixed top-0 left-0 right-0 z-40 bg-white dark:bg-slate-800 border-b dark:border-[#0b2b20] p-3 flex items-center justify-between",
+    headerTitle: "font-bold text-base md:text-lg text-slate-900 dark:text-slate-100",
+    headerSubtitle: "text-xs text-slate-500 dark:text-slate-400",
+
+    // Branding / sidebar title
+    brandTitle: "text-xl font-bold text-blue-600 dark:text-green-400 flex items-center gap-2",
+
+    // Page titles / body text
+    pageTitle: "text-3xl font-bold text-slate-900 dark:text-slate-100",
+    pageSubtitle: "text-slate-500 dark:text-[#B6B6B6] text-sm mt-1",
+    bodyText: "text-slate-500 dark:text-[#B6B6B6] text-sm mt-1",
+    mutedText: "text-slate-500 dark:text-slate-400",
+
+    // Sidebar
+    sidebarDesktop: "hidden md:block w-64 bg-white dark:bg-[#262626] border-r dark:border-[#0b2b20] p-6 space-y-8",
+    sidebarMobilePanelWrap: "fixed inset-y-0 left-0 z-50 w-64 transform md:hidden transition-transform",
+    sidebarMobilePanel: "h-full bg-white dark:bg-[#262626] border-r dark:border-[#0b2b20] p-6",
+
+    // overlay
+    overlay: "fixed inset-0 bg-black/30 z-40 md:hidden",
+
+    // tab/link
+    tabSelected: "px-3 py-2 rounded-md bg- dark:bg-[#3A6353] text-white shadow-sm",
+    tabDefault: "text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-[#3A6353]",
+    tabMobileSelected: "text-blue-600 dark:bg-[#3A6353] font-medium",
+
+    // Buttons
+    btnPrimary: "bg-[#3A6353] text-white",
+    btnPrimaryHover: "hover:bg-[#4D846F]",
+    btnPrimaryDark: "dark:bg-[#3A6353] dark:hover:bg-[#4D846F]",
+    btnAccentGreen: "bg-[#3A6353] dark:hover:bg-[#4D846F] text-white",
+
+    // Cards / panels / tables
+    cardDark: "bg-white dark:bg-[#262626] rounded-2xl shadow-sm border dark:border-[#262626] p-6",
+    tableWrapDark: "bg-white dark:bg-[#262626] rounded-2xl shadow-sm border dark:border-[#262626] overflow-hidden",
+    tableHeadDark: "bg-slate-50 dark:bg-[#3D3D3D] text-slate-500 dark:text-slate-400 text-sm",
+    bodyDivideDark: "divide-y dark:divide-[#262626]",
+
+    // generic small cards and inputs
+    cardSmallDark: "bg-white dark:bg-[#262626]",
+    inputDark: "bg-white dark:bg-[#262626] dark:border-[#0b2b20] text-slate-900 dark:text-slate-100 rounded-md px-3 py-2",
+
+    // badges
+    soldBadge: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
+    activeBadge: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+  };
+
   const [darkMode, setDarkMode] = useState(false);
   const [expandedIds, setExpandedIds] = useState([]); // track expanded rows/cards
   const [properties, setProperties] = useState([
@@ -144,10 +197,10 @@ export default function Dashboard() {
 
   return (
     <div className={`${darkMode ? 'dark' : ''}`}>
-      <div className="flex min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 transition-colors duration-300">
+      <div className={THEME.page}>
 
         {/* MOBILE HEADER */}
-        <header className="md:hidden fixed top-0 left-0 right-0 z-40 bg-white dark:bg-slate-800 border-b dark:border-slate-700 p-3 flex items-center justify-between">
+        <header className={THEME.headerMobile}>
           <button
             onClick={() => setShowSidebar(true)}
             className="p-2 rounded-md text-slate-700 dark:text-slate-200"
@@ -156,30 +209,27 @@ export default function Dashboard() {
             <Menu size={20} />
           </button>
           <div className="text-center">
-            <div className="font-bold">Green Tree</div>
-            <div className="text-xs text-slate-500 dark:text-slate-400">{selectedTab === 'dashboard' ? 'Dashboard' : selectedTab === 'customers' ? 'Customers' : 'Statistics'}</div>
+            <div className={THEME.headerTitle}>Green Tree</div>
+            <div className={THEME.headerSubtitle}>{selectedTab === 'dashboard' ? 'Dashboard' : selectedTab === 'customers' ? 'Customers' : 'Statistics'}</div>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={toggleDarkMode} className="p-2 rounded-md text-slate-700 dark:text-slate-200">
               {darkMode ? <Sun size={18} /> : <Moon size={18} />}
             </button>
-            <button onClick={openForm} className="bg-blue-600 text-white px-3 py-1 rounded-md text-sm">+ Add</button>
+            <button onClick={openForm} className={`${THEME.btnPrimary} ${THEME.btnPrimaryDark} px-3 py-1 rounded-md text-sm`}>+ Add</button>
           </div>
         </header>
 
         {/* SIDEBAR - desktop */}
-        <aside className="hidden md:block w-64 bg-white dark:bg-slate-800 border-r dark:border-slate-700 p-6 space-y-8">
-          <h1 className="text-xl font-bold text-blue-600 dark:text-blue-400 flex items-center gap-2">
+        <aside className={THEME.sidebarDesktop}>
+          <h1 className={THEME.brandTitle}>
             <Home size={24} /> Green Tree
           </h1>
           <nav className="space-y-4">
             <a
               href="#"
               onClick={(e) => { e.preventDefault(); setSelectedTab('dashboard'); }}
-              className={`flex items-center gap-3 ${selectedTab === 'dashboard'
-                ? 'px-3 py-2 rounded-md bg-gradient-to-r from-blue-600 to-green-500 text-white shadow-sm'
-                : 'text-slate-500 dark:text-slate-400 hover:text-blue-600'}`}
-
+              className={`flex items-center gap-3 ${selectedTab === 'dashboard' ? THEME.tabSelected : THEME.tabDefault}`}
             >
               <Home size={20}/> Dashboard
             </a>
@@ -187,10 +237,7 @@ export default function Dashboard() {
             <a
               href="#"
               onClick={(e) => { e.preventDefault(); setSelectedTab('customers'); }}
-              className={`flex items-center gap-3 ${selectedTab === 'customers'
-                ? 'px-3 py-2 rounded-md bg-gradient-to-r from-blue-600 to-green-500 text-white shadow-sm'
-                : 'text-slate-500 dark:text-slate-400 hover:text-blue-600'}`}
-
+              className={`flex items-center gap-3 ${selectedTab === 'customers' ? THEME.tabSelected : THEME.tabDefault}`}
             >
               <DollarSign size={20}/> Customers
             </a>
@@ -198,20 +245,17 @@ export default function Dashboard() {
             <a
               href="#"
               onClick={(e) => { e.preventDefault(); setSelectedTab('statistics'); }}
-              className={`flex items-center gap-3 ${selectedTab === 'statistics'
-                ? 'px-3 py-2 rounded-md bg-gradient-to-r from-blue-600 to-green-500 text-white shadow-sm'
-                : 'text-slate-500 dark:text-slate-400 hover:text-blue-600'}`}
-
+              className={`flex items-center gap-3 ${selectedTab === 'statistics' ? THEME.tabSelected : THEME.tabDefault}`}
             >
               <BarChart size={20}/> Statistics
             </a>
 
-            <a href="#" className="flex items-center gap-3 text-slate-500 dark:text-slate-400 hover:text-blue-600"><Search size={20}/> Watcher</a>
+            <a href="#" className={`flex items-center gap-3 ${THEME.tabDefault}`}><Search size={20}/> Watcher</a>
             
             {/* DARK MODE TOGGLE BUTTON */}
             <button 
               onClick={toggleDarkMode}
-              className="flex items-center gap-3 w-full text-slate-500 dark:text-slate-400 hover:text-blue-600 transition"
+              className="flex items-center gap-3 w-full text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-green-400 transition"
             >
               {darkMode ? <Sun size={20} /> : <Moon size={20} />}
               {darkMode ? 'Light Mode' : 'Dark Mode'}
@@ -220,10 +264,10 @@ export default function Dashboard() {
         </aside>
 
         {/* SIDEBAR - mobile off-canvas */}
-        <div className={`fixed inset-y-0 left-0 z-50 w-64 transform md:hidden transition-transform ${showSidebar ? 'translate-x-0' : '-translate-x-full'}`}>
-          <div className="h-full bg-white dark:bg-slate-800 border-r dark:border-slate-700 p-6">
+        <div className={`${THEME.sidebarMobilePanelWrap} ${showSidebar ? 'translate-x-0' : '-translate-x-full'}`} aria-hidden={!showSidebar}>
+          <div className={THEME.sidebarMobilePanel}>
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-bold text-blue-600 dark:text-blue-400 flex items-center gap-2">
+              <h2 className={THEME.brandTitle}>
                 <Home size={20} /> Green Tree
               </h2>
               <button onClick={() => setShowSidebar(false)} className="p-2 rounded-md text-slate-700 dark:text-slate-200"><X /></button>
@@ -233,7 +277,7 @@ export default function Dashboard() {
               <a
                 href="#"
                 onClick={(e) => { e.preventDefault(); setSelectedTab('dashboard'); setShowSidebar(false); }}
-                className={`flex items-center gap-3 ${selectedTab === 'dashboard' ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-slate-500 dark:text-slate-400 hover:text-blue-600'}`}
+                className={`flex items-center gap-3 ${selectedTab === 'dashboard' ? THEME.tabMobileSelected : THEME.tabDefault}`}
               >
                 <Home size={18}/> Dashboard
               </a>
@@ -241,7 +285,7 @@ export default function Dashboard() {
               <a
                 href="#"
                 onClick={(e) => { e.preventDefault(); setSelectedTab('customers'); setShowSidebar(false); }}
-                className={`flex items-center gap-3 ${selectedTab === 'customers' ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-slate-500 dark:text-slate-400 hover:text-blue-600'}`}
+                className={`flex items-center gap-3 ${selectedTab === 'customers' ? THEME.tabMobileSelected : THEME.tabDefault}`}
               >
                 <DollarSign size={18}/> Customers
               </a>
@@ -249,35 +293,42 @@ export default function Dashboard() {
               <a
                 href="#"
                 onClick={(e) => { e.preventDefault(); setSelectedTab('statistics'); setShowSidebar(false); }}
-                className={`flex items-center gap-3 ${selectedTab === 'statistics' ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-slate-500 dark:text-slate-400 hover:text-blue-600'}`}
+                className={`flex items-center gap-3 ${selectedTab === 'statistics' ? THEME.tabMobileSelected : THEME.tabDefault}`}
               >
                 <BarChart size={18}/> Statistics
               </a>
 
-              <a href="#" className="flex items-center gap-3 text-slate-500 dark:text-slate-400 hover:text-blue-600"><Search size={18}/> Watcher</a>
+              <a href="#" className={`flex items-center gap-3 ${THEME.tabDefault}`}><Search size={18}/> Watcher</a>
 
               <button
                 onClick={() => { toggleDarkMode(); setShowSidebar(false); }}
-                className="flex items-center gap-3 w-full text-slate-500 dark:text-slate-400 hover:text-blue-600 transition mt-4"
+                className="flex items-center gap-3 w-full text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-green-400 transition mt-4"
               >
                 {darkMode ? <Sun size={18} /> : <Moon size={18} />}
                 {darkMode ? 'Light Mode' : 'Dark Mode'}
               </button>
             </nav>
           </div>
-          {/* overlay */}
-          {showSidebar && <div onClick={() => setShowSidebar(false)} className="fixed inset-0 bg-black/30" />}
         </div>
+
+        {/* Overlay (sibling, covers screen when sidebar open) */}
+        {showSidebar && (
+          <div
+            onClick={() => setShowSidebar(false)}
+            className={THEME.overlay}
+            aria-hidden="true"
+          />
+        )}
 
         {/* MAIN CONTENT */}
         <main className="flex-1 p-4 md:p-10 pt-20 md:pt-10">
           {/* Desktop header kept above inside main on md+ */}
           <div className="hidden md:flex justify-between items-center mb-10">
             <div>
-              <h2 className="text-3xl font-bold">
+              <h2 className={THEME.pageTitle}>
                 {selectedTab === 'dashboard' ? 'Main Dashboard' : selectedTab === 'customers' ? 'Customer Database' : 'Statistics'}
               </h2>
-              <p className="text-slate-500 dark:text-slate-400">
+              <p className={THEME.pageSubtitle}>
                 {selectedTab === 'dashboard'
                   ? 'Manage your real estate photography escrow.'
                   : selectedTab === 'customers'
@@ -289,7 +340,7 @@ export default function Dashboard() {
             {selectedTab === 'dashboard' ? (
               <button
                 onClick={openForm}
-                className="bg-blue-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-blue-700"
+                className={`${THEME.btnPrimary} ${THEME.btnPrimaryDark} px-6 py-2 rounded-lg font-medium`}
               >
                 + Add New Shoot
               </button>
@@ -300,22 +351,22 @@ export default function Dashboard() {
           {selectedTab === 'dashboard' && (
             <>
               <div className="hidden md:grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
-                <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700">
+                <div className={THEME.cardDark}>
                   <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold text-green-600">READY TO BILL</p>
                   <p className="text-3xl font-bold mt-2">$600.00</p>
                 </div>
               </div>
 
-              <div className="hidden md:block bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
+              <div className={THEME.tableWrapDark}>
                 <table className="w-full">
-                  <thead className="bg-slate-50 dark:bg-slate-700/50 text-slate-500 dark:text-slate-400 text-sm">
+                  <thead className={THEME.tableHeadDark}>
                     <tr>
                       <th className="p-4 text-left font-medium">Address</th>
                       <th className="p-4 text-left font-medium">Status</th>
                       <th className="p-4 text-right">Action</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y dark:divide-slate-700">
+                  <tbody className={THEME.bodyDivideDark}>
                     {properties.map((prop) => (
                       <React.Fragment key={prop.id}>
                         <tr
@@ -325,9 +376,7 @@ export default function Dashboard() {
                         >
                           <td className="p-4 font-medium">{prop.address}</td>
                           <td className="p-4">
-                            <span className={`px-3 py-1 rounded-full text-xs font-bold ${
-                              prop.status === 'Sold' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
-                            }`}>
+                            <span className={`px-3 py-1 rounded-full text-xs font-bold ${prop.status === 'Sold' ? THEME.soldBadge : THEME.activeBadge}`}>
                               {prop.status}
                             </span>
                           </td>
@@ -335,7 +384,7 @@ export default function Dashboard() {
                             {prop.status === 'Sold' && (
                               <button
                                 onClick={(e) => handleEmailEscrow(e, prop)}
-                                className="bg-green-600 text-white px-4 py-1 rounded-md text-sm"
+                                className={`${THEME.btnAccentGreen} px-4 py-1 rounded-md text-sm`}
                               >
                                 Email Escrow
                               </button>
@@ -358,7 +407,7 @@ export default function Dashboard() {
                                 <div className="flex items-center gap-3">
                                   <button
                                     onClick={(e) => { e.stopPropagation(); }}
-                                    className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm"
+                                    className={`px-4 py-2 ${THEME.btnPrimary} ${THEME.btnPrimaryDark} text-white rounded-md text-sm`}
                                   >
                                     View
                                   </button>
@@ -385,7 +434,7 @@ export default function Dashboard() {
                   <article
                     key={prop.id}
                     onClick={() => toggleExpand(prop.id)}
-                    className="bg-white dark:bg-slate-800 rounded-lg p-4 shadow-sm border border-slate-200 dark:border-slate-700"
+                    className="bg-white dark:bg-slate-800 rounded-lg p-4 shadow-sm border border-slate-200 dark:border-[#0b2b20]"
                   >
                     <div className="flex justify-between items-start">
                       <div>
@@ -393,7 +442,7 @@ export default function Dashboard() {
                         <div className="text-xs text-slate-500 dark:text-slate-400">{prop.agent}</div>
                       </div>
                       <div className="text-right">
-                        <div className={`px-2 py-1 rounded-full text-xs font-bold ${prop.status === 'Sold' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'}`}>{prop.status}</div>
+                        <div className={`px-2 py-1 rounded-full text-xs font-bold ${prop.status === 'Sold' ? THEME.soldBadge : THEME.activeBadge}`}>{prop.status}</div>
                         <div className="text-sm text-slate-500 dark:text-slate-400 mt-2">${prop.price.toFixed(2)}</div>
                       </div>
                     </div>
@@ -402,7 +451,7 @@ export default function Dashboard() {
                       <div className="mt-3 flex gap-2">
                         <button
                           onClick={(e) => { e.stopPropagation(); }}
-                          className="flex-1 px-3 py-2 bg-blue-600 text-white rounded-md text-sm"
+                          className={`flex-1 px-3 py-2 ${THEME.btnPrimary} ${THEME.btnPrimaryDark} text-white rounded-md text-sm`}
                         >
                           View
                         </button>
@@ -424,9 +473,9 @@ export default function Dashboard() {
           {selectedTab === 'customers' && (
             <>
               {/* Desktop table */}
-              <div className="hidden md:block bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
+              <div className={THEME.cardDark + " mb-10 hidden md:block"}>
                 <table className="w-full">
-                  <thead className="bg-slate-50 dark:bg-slate-700/50 text-slate-500 dark:text-slate-400 text-sm">
+                  <thead className={THEME.cardDark}>
                     <tr>
                       <th className="p-4 text-left font-medium">Name</th>
                       <th className="p-4 text-left font-medium">Email</th>
@@ -446,7 +495,7 @@ export default function Dashboard() {
                           <div className="inline-flex gap-2">
                             <button
                               onClick={() => openEditCustomer(c)}
-                              className="px-3 py-1 bg-blue-600 text-white rounded-md text-sm"
+                              className={`px-3 py-1 ${THEME.btnPrimary} ${THEME.btnPrimaryDark} text-white rounded-md text-sm`}
                             >
                               Edit
                             </button>
@@ -467,7 +516,7 @@ export default function Dashboard() {
               {/* Mobile cards */}
               <div className="md:hidden space-y-4">
                 {customers.map(c => (
-                  <article key={c.id} className="bg-white dark:bg-slate-800 rounded-lg p-4 shadow-sm border border-slate-200 dark:border-slate-700">
+                  <article key={c.id} className="bg-white dark:bg-slate-800 rounded-lg p-4 shadow-sm border border-slate-200 dark:border-[#0b2b20]">
                     <div className="flex justify-between items-center">
                       <div>
                         <div className="font-medium">{c.name}</div>
@@ -480,7 +529,7 @@ export default function Dashboard() {
                     </div>
 
                     <div className="mt-3 flex gap-2">
-                      <button onClick={() => openEditCustomer(c)} className="flex-1 px-3 py-2 bg-blue-600 text-white rounded-md text-sm">Edit</button>
+                      <button onClick={() => openEditCustomer(c)} className={`flex-1 px-3 py-2 ${THEME.btnPrimary} ${THEME.btnPrimaryDark} text-white rounded-md text-sm`}>Edit</button>
                       <button onClick={() => handleDeleteCustomer(c.id)} className="flex-1 px-3 py-2 bg-red-500 text-white rounded-md text-sm">Delete</button>
                     </div>
                   </article>
@@ -492,19 +541,19 @@ export default function Dashboard() {
           {/* STATISTICS */}
           {selectedTab === 'statistics' && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700">
+              <div className={THEME.cardDark}>
                 <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">AVG INCOME / MONTH</p>
                 <p className="text-4xl font-bold mt-3">${fakeStats.avgIncomePerMonth.toLocaleString()}</p>
                 <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Sample average monthly income (fake data)</p>
               </div>
 
-              <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700">
+              <div className={THEME.cardDark}>
                 <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">AVG LISTING TIME</p>
                 <p className="text-4xl font-bold mt-3">{fakeStats.avgListingDays} days</p>
                 <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Average time a listing stays active (fake data)</p>
               </div>
 
-              <div className="md:col-span-2 bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700">
+              <div className={THEME.cardDark}>
                 <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">NOTES</p>
                 <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">These statistics are placeholders. We'll hook real analytics / DB queries later to populate accurate metrics.</p>
               </div>
@@ -533,7 +582,7 @@ export default function Dashboard() {
                 name="address"
                 value={form.address}
                 onChange={handleFormChange}
-                className="mt-1 block w-full rounded-md border px-3 py-2 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100"
+                className={`mt-1 block w-full ${THEME.inputDark}`}
                 required
               />
             </label>
@@ -544,7 +593,7 @@ export default function Dashboard() {
                 name="status"
                 value={form.status}
                 onChange={handleFormChange}
-                className="mt-1 block w-full rounded-md border px-3 py-2 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100"
+                className={`mt-1 block w-full ${THEME.inputDark}`}
               >
                 <option>Active</option>
                 <option>Pending</option>
@@ -560,7 +609,7 @@ export default function Dashboard() {
                 onChange={handleFormChange}
                 type="number"
                 step="0.01"
-                className="mt-1 block w-full rounded-md border px-3 py-2 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100"
+                className={`mt-1 block w-full ${THEME.inputDark}`}
               />
             </label>
 
@@ -570,7 +619,7 @@ export default function Dashboard() {
                 name="agent"
                 value={form.agent}
                 onChange={handleFormChange}
-                className="mt-1 block w-full rounded-md border px-3 py-2 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100"
+                className={`mt-1 block w-full ${THEME.inputDark}`}
               />
             </label>
 
@@ -584,7 +633,7 @@ export default function Dashboard() {
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 rounded-md bg-blue-600 text-white"
+                className={`px-4 py-2 rounded-md ${THEME.btnPrimary} ${THEME.btnPrimaryDark} text-white`}
               >
                 Add
               </button>
@@ -613,7 +662,7 @@ export default function Dashboard() {
                 name="name"
                 value={editingCustomer.name}
                 onChange={handleCustomerChange}
-                className="mt-1 block w-full rounded-md border px-3 py-2 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100"
+                className={`mt-1 block w-full ${THEME.inputDark}`}
                 required
               />
             </label>
@@ -624,7 +673,7 @@ export default function Dashboard() {
                 name="email"
                 value={editingCustomer.email}
                 onChange={handleCustomerChange}
-                className="mt-1 block w-full rounded-md border px-3 py-2 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100"
+                className={`mt-1 block w-full ${THEME.inputDark}`}
               />
             </label>
 
@@ -634,7 +683,7 @@ export default function Dashboard() {
                 name="phone"
                 value={editingCustomer.phone}
                 onChange={handleCustomerChange}
-                className="mt-1 block w-full rounded-md border px-3 py-2 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100"
+                className={`mt-1 block w-full ${THEME.inputDark}`}
               />
             </label>
 
@@ -644,7 +693,7 @@ export default function Dashboard() {
                 name="company"
                 value={editingCustomer.company}
                 onChange={handleCustomerChange}
-                className="mt-1 block w-full rounded-md border px-3 py-2 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100"
+                className={`mt-1 block w-full ${THEME.inputDark}`}
               />
             </label>
 
@@ -672,7 +721,7 @@ export default function Dashboard() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-md bg-blue-600 text-white"
+                  className={`px-4 py-2 rounded-md ${THEME.btnPrimary} ${THEME.btnPrimaryDark} text-white`}
                 >
                   Save
                 </button>
