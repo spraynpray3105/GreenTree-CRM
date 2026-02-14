@@ -3,76 +3,50 @@ import React, { useState, useEffect } from 'react';
 import { Home, DollarSign, Mail, Search, Moon, Sun, BarChart, Menu, X } from 'lucide-react';
 
 export default function Dashboard() {
-  // Theme / class variables — tweak these at the top to change the app look
-  const THEME = {
-    // overall page
-    page: "flex min-h-screen bg-slate-50 dark:bg-[#1C1C1C] text-slate-900 dark:text-slate-100 transition-colors duration-300",
+  // API base (change if needed)
+  const API_BASE = "https://greentree-crm.onrender.com";
 
-    // Header
+  // THEME: central place for classes and colors used across the page.
+  // Edit these values to change styling app-wide.
+  const THEME = {
+    page: "flex min-h-screen bg-slate-50 dark:bg-[#1C1C1C] text-slate-900 dark:text-slate-100 transition-colors duration-300",
     headerMobile: "md:hidden fixed top-0 left-0 right-0 z-40 bg-white dark:bg-slate-800 border-b dark:border-[#0b2b20] p-3 flex items-center justify-between",
     headerTitle: "font-bold text-base md:text-lg text-slate-900 dark:text-slate-100",
     headerSubtitle: "text-xs text-slate-500 dark:text-slate-400",
-
-    // Branding / sidebar title
     brandTitle: "text-xl font-bold text-blue-600 dark:text-green-400 flex items-center gap-2",
-
-    // Page titles / body text
     pageTitle: "text-3xl font-bold text-slate-900 dark:text-slate-100",
     pageSubtitle: "text-slate-500 dark:text-[#B6B6B6] text-sm mt-1",
     bodyText: "text-slate-500 dark:text-[#B6B6B6] text-sm mt-1",
     mutedText: "text-slate-500 dark:text-slate-400",
-
-    // Sidebar
     sidebarDesktop: "hidden md:block w-64 bg-white dark:bg-[#262626] border-r dark:border-[#0b2b20] p-6 space-y-8",
     sidebarMobilePanelWrap: "fixed inset-y-0 left-0 z-50 w-64 transform md:hidden transition-transform",
     sidebarMobilePanel: "h-full bg-white dark:bg-[#262626] border-r dark:border-[#0b2b20] p-6",
-
-    // overlay
     overlay: "fixed inset-0 bg-black/30 z-40 md:hidden",
-
-    // tab/link
     tabSelected: "px-3 py-2 rounded-md bg- dark:bg-[#3A6353] text-white shadow-sm",
     tabDefault: "text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-[#3A6353]",
     tabMobileSelected: "text-blue-600 dark:bg-[#3A6353] font-medium",
-
-    // Buttons
     btnPrimary: "bg-[#3A6353] text-white",
     btnPrimaryHover: "hover:bg-[#4D846F]",
     btnPrimaryDark: "dark:bg-[#3A6353] dark:hover:bg-[#4D846F]",
     btnAccentGreen: "bg-[#3A6353] dark:hover:bg-[#4D846F] text-white",
-
-    // Cards / panels / tables
     cardDark: "bg-white dark:bg-[#262626] rounded-2xl shadow-sm border dark:border-[#262626] p-6",
     tableWrapDark: "bg-white dark:bg-[#262626] rounded-2xl shadow-sm border dark:border-[#262626] overflow-hidden",
     tableHeadDark: "bg-slate-50 dark:bg-[#3D3D3D] text-slate-500 dark:text-slate-400 text-sm",
     bodyDivideDark: "divide-y dark:divide-[#262626]",
-
-    // generic small cards and inputs
     cardSmallDark: "bg-white dark:bg-[#262626]",
     inputDark: "bg-white dark:bg-[#262626] dark:border-[#0b2b20] text-slate-900 dark:text-slate-100 rounded-md px-3 py-2",
-
-    // badges
     soldBadge: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
     activeBadge: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
   };
 
-  const [darkMode, setDarkMode] = useState(false);
-  const [expandedIds, setExpandedIds] = useState([]); // track expanded rows/cards
-  const [properties, setProperties] = useState([
-    { id: 1, address: "123 Maple Ave", status: "Active", price: 450, agent: "Sarah Smith" },
-    { id: 2, address: "888 Ocean Blvd", status: "Sold", price: 600, agent: "John Doe" },
-    { id: 3, address: "45 Pine St", status: "Pending", price: 350, agent: "Sarah Smith" },
-  ]);
-
-  const [customers, setCustomers] = useState([
-    { id: 1, name: "Sarah Smith", email: "sarah@example.com", phone: "555-1234", company: "Sarah Photo" },
-    { id: 2, name: "John Doe", email: "john@example.com", phone: "555-5678", company: "JD Real Estate" },
-    { id: 3, name: "Acme Rentals", email: "contact@acmerentals.com", phone: "555-9012", company: "Acme Rentals" },
-  ]);
-
-  // UI state
-  const [selectedTab, setSelectedTab] = useState('dashboard');
-  const [showSidebar, setShowSidebar] = useState(false); // mobile sidebar
+  // data & UI state
+  const [darkMode, setDarkMode] = useState(false); // toggles the `dark` wrapper class
+  const [selectedTab, setSelectedTab] = useState('dashboard'); // which tab/page is active
+  const [showSidebar, setShowSidebar] = useState(false); // mobile sidebar open/close
+  const [expandedIds, setExpandedIds] = useState([]); // expanded rows/cards
+  const [properties, setProperties] = useState([]); // properties from DB
+  const [customers, setCustomers] = useState([]); // derived customers list
+  const [loading, setLoading] = useState(true); // global loading indicator
 
   // Form state (add shoot)
   const [showForm, setShowForm] = useState(false);
@@ -87,11 +61,8 @@ export default function Dashboard() {
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [showCustomerEditor, setShowCustomerEditor] = useState(false);
 
-  // Fake statistics (placeholder)
-  const fakeStats = {
-    avgIncomePerMonth: 4200,
-    avgListingDays: 18
-  };
+  // Fake statistics (placeholder) — will derive from properties if desired
+  const [fakeStats, setFakeStats] = useState({ avgIncomePerMonth: 0, avgListingDays: 0 });
 
   // Responsive: auto-close mobile sidebar when switching to desktop
   useEffect(() => {
@@ -101,6 +72,65 @@ export default function Dashboard() {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
+
+  // Fetch properties from API and derive customers + simple stats
+  useEffect(() => {
+    const fetchProperties = async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(`${API_BASE}/properties`);
+        if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
+        const data = await res.json();
+        // normalize DB entries
+        const normalized = data.map(p => ({
+          id: p.id,
+          address: p.address || "",
+          status: p.status || "Active",
+          price: typeof p.price === 'number' ? p.price : parseFloat(p.price) || 0,
+          agent: p.agent || ""
+        }));
+        setProperties(normalized);
+
+        // derive customers from unique agent names
+        const seen = new Map();
+        normalized.forEach(p => {
+          const name = (p.agent || "").trim();
+          if (!name) return;
+          const key = name.toLowerCase();
+          if (!seen.has(key)) {
+            seen.set(key, { id: seen.size + 1, name, email: "", phone: "", company: "" });
+          }
+        });
+        setCustomers(Array.from(seen.values()));
+
+        // derive simple stats for display
+        const totalIncome = normalized.reduce((s, p) => s + (p.price || 0), 0);
+        const avgIncome = normalized.length ? Math.round(totalIncome / normalized.length) : 0;
+        const avgDays = 18; // placeholder
+        setFakeStats({ avgIncomePerMonth: avgIncome, avgListingDays: avgDays });
+      } catch (err) {
+        console.error("Failed to load properties:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchProperties();
+  }, []);
+
+  // helper to rebuild customers when properties change
+  const rebuildCustomersFromProperties = (props) => {
+    const seen = new Map();
+    props.forEach(p => {
+      const name = (p.agent || "").trim();
+      if (!name) return;
+      const key = name.toLowerCase();
+      if (!seen.has(key)) {
+        seen.set(key, { id: seen.size + 1, name, email: "", phone: "", company: "" });
+      }
+    });
+    setCustomers(Array.from(seen.values()));
+  };
 
   const toggleDarkMode = () => setDarkMode(!darkMode);
 
@@ -127,41 +157,42 @@ export default function Dashboard() {
     setForm(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleAddProperty = (e) => {
+  // POST new property to API and update local state
+  const handleAddProperty = async (e) => {
     e.preventDefault();
     if (!form.address.trim()) return alert("Address is required");
-    const priceNum = parseFloat(form.price) || 0;
-    const newId = properties.length ? Math.max(...properties.map(p => p.id)) + 1 : 1;
-    const agentName = form.agent.trim() || "Unknown";
-    const newProp = {
-      id: newId,
+    const payload = {
       address: form.address.trim(),
       status: form.status,
-      price: priceNum,
-      agent: agentName
+      price: parseFloat(form.price) || 0,
+      agent: form.agent.trim()
     };
 
-    setProperties(prev => [newProp, ...prev]);
-
-    if (form.agent.trim()) {
-      const exists = customers.some(c => c.name.toLowerCase() === agentName.toLowerCase());
-      if (!exists) {
-        const newCustomerId = customers.length ? Math.max(...customers.map(c => c.id)) + 1 : 1;
-        const newCustomer = {
-          id: newCustomerId,
-          name: agentName,
-          email: "",
-          phone: "",
-          company: ""
-        };
-        setCustomers(prev => [newCustomer, ...prev]);
-      }
+    try {
+      const res = await fetch(`${API_BASE}/properties`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error(`Create failed: ${res.status}`);
+      const created = await res.json();
+      const newProp = {
+        id: created.id,
+        address: created.address || payload.address,
+        status: created.status || payload.status,
+        price: typeof created.price === 'number' ? created.price : parseFloat(created.price) || payload.price,
+        agent: created.agent || payload.agent
+      };
+      setProperties(prev => [newProp, ...prev]);
+      rebuildCustomersFromProperties([newProp, ...properties]);
+      setShowForm(false);
+    } catch (err) {
+      console.error("Failed to create property:", err);
+      alert("Failed to create property. See console for details.");
     }
-
-    setShowForm(false);
   };
 
-  // Customer editing handlers
+  // Customer editing handlers (local only; extend to API if you create customers endpoint)
   const openEditCustomer = (customer) => {
     setEditingCustomer({ ...customer });
     setShowCustomerEditor(true);
@@ -196,11 +227,15 @@ export default function Dashboard() {
   };
 
   return (
+    // Wrapper toggles 'dark' class based on state so Tailwind dark: utilities apply
     <div className={`${darkMode ? 'dark' : ''}`}>
+      {/* Page container: controls page background, text color and overall layout */}
       <div className={THEME.page}>
 
         {/* MOBILE HEADER */}
+        {/* Header visible on small screens (md:hidden). Contains menu button, title and actions */}
         <header className={THEME.headerMobile}>
+          {/* Menu button opens mobile sidebar */}
           <button
             onClick={() => setShowSidebar(true)}
             className="p-2 rounded-md text-slate-700 dark:text-slate-200"
@@ -208,24 +243,38 @@ export default function Dashboard() {
           >
             <Menu size={20} />
           </button>
+
+          {/* Center area contains app title and current page subtitle */}
           <div className="text-center">
+            {/* Header title (uses THEME.headerTitle for typography) */}
             <div className={THEME.headerTitle}>Green Tree</div>
+            {/* Small subtitle showing current selected tab */}
             <div className={THEME.headerSubtitle}>{selectedTab === 'dashboard' ? 'Dashboard' : selectedTab === 'customers' ? 'Customers' : 'Statistics'}</div>
           </div>
+
+          {/* Right area: dark mode toggle and primary add button */}
           <div className="flex items-center gap-2">
+            {/* Dark mode toggle: small icon button */}
             <button onClick={toggleDarkMode} className="p-2 rounded-md text-slate-700 dark:text-slate-200">
               {darkMode ? <Sun size={18} /> : <Moon size={18} />}
             </button>
+
+            {/* Primary action button: uses THEME.btnPrimary + THEME.btnPrimaryDark */}
             <button onClick={openForm} className={`${THEME.btnPrimary} ${THEME.btnPrimaryDark} px-3 py-1 rounded-md text-sm`}>+ Add</button>
           </div>
         </header>
 
         {/* SIDEBAR - desktop */}
+        {/* Permanent left navigation for md+ screens. THEME.sidebarDesktop sets width, background and padding */}
         <aside className={THEME.sidebarDesktop}>
+          {/* Branding/title at top of sidebar */}
           <h1 className={THEME.brandTitle}>
             <Home size={24} /> Green Tree
           </h1>
+
+          {/* Navigation links (Dashboard / Customers / Statistics / Watcher) */}
           <nav className="space-y-4">
+            {/* Dashboard link: uses THEME.tabSelected when active, otherwise THEME.tabDefault */}
             <a
               href="#"
               onClick={(e) => { e.preventDefault(); setSelectedTab('dashboard'); }}
@@ -234,6 +283,7 @@ export default function Dashboard() {
               <Home size={20}/> Dashboard
             </a>
 
+            {/* Customers link */}
             <a
               href="#"
               onClick={(e) => { e.preventDefault(); setSelectedTab('customers'); }}
@@ -242,6 +292,7 @@ export default function Dashboard() {
               <DollarSign size={20}/> Customers
             </a>
 
+            {/* Statistics link */}
             <a
               href="#"
               onClick={(e) => { e.preventDefault(); setSelectedTab('statistics'); }}
@@ -250,9 +301,10 @@ export default function Dashboard() {
               <BarChart size={20}/> Statistics
             </a>
 
+            {/* Static "Watcher" link */}
             <a href="#" className={`flex items-center gap-3 ${THEME.tabDefault}`}><Search size={20}/> Watcher</a>
             
-            {/* DARK MODE TOGGLE BUTTON */}
+            {/* Dark mode toggle button (in sidebar for convenience) */}
             <button 
               onClick={toggleDarkMode}
               className="flex items-center gap-3 w-full text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-green-400 transition"
@@ -264,15 +316,21 @@ export default function Dashboard() {
         </aside>
 
         {/* SIDEBAR - mobile off-canvas */}
+        {/* Off-canvas wrapper: THEME.sidebarMobilePanelWrap controls position & transition.
+            We toggle translate-x classes to show/hide */}
         <div className={`${THEME.sidebarMobilePanelWrap} ${showSidebar ? 'translate-x-0' : '-translate-x-full'}`} aria-hidden={!showSidebar}>
+          {/* Panel contents with same branding and nav as desktop, optimized for mobile */}
           <div className={THEME.sidebarMobilePanel}>
+            {/* Top row: brand + close button */}
             <div className="flex items-center justify-between mb-6">
               <h2 className={THEME.brandTitle}>
                 <Home size={20} /> Green Tree
               </h2>
+              {/* Close button hides the panel */}
               <button onClick={() => setShowSidebar(false)} className="p-2 rounded-md text-slate-700 dark:text-slate-200"><X /></button>
             </div>
 
+            {/* Mobile navigation (same links, but closing the panel after selecting) */}
             <nav className="space-y-4">
               <a
                 href="#"
@@ -300,6 +358,7 @@ export default function Dashboard() {
 
               <a href="#" className={`flex items-center gap-3 ${THEME.tabDefault}`}><Search size={18}/> Watcher</a>
 
+              {/* Mobile dark mode toggle */}
               <button
                 onClick={() => { toggleDarkMode(); setShowSidebar(false); }}
                 className="flex items-center gap-3 w-full text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-green-400 transition mt-4"
@@ -311,7 +370,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Overlay (sibling, covers screen when sidebar open) */}
+        {/* Overlay shown when mobile sidebar is open (clicking it closes the sidebar) */}
         {showSidebar && (
           <div
             onClick={() => setShowSidebar(false)}
@@ -321,10 +380,12 @@ export default function Dashboard() {
         )}
 
         {/* MAIN CONTENT */}
+        {/* Main area stretches to fill remaining width (flex-1). Padding adjusts on md+ */}
         <main className="flex-1 p-4 md:p-10 pt-20 md:pt-10">
-          {/* Desktop header kept above inside main on md+ */}
+          {/* Desktop header/top controls (hidden on mobile via hidden md:flex) */}
           <div className="hidden md:flex justify-between items-center mb-10">
             <div>
+              {/* Page title and subtitle use THEME.pageTitle / THEME.pageSubtitle */}
               <h2 className={THEME.pageTitle}>
                 {selectedTab === 'dashboard' ? 'Main Dashboard' : selectedTab === 'customers' ? 'Customer Database' : 'Statistics'}
               </h2>
@@ -337,6 +398,7 @@ export default function Dashboard() {
               </p>
             </div>
 
+            {/* Primary action button on the top-right for dashboard */}
             {selectedTab === 'dashboard' ? (
               <button
                 onClick={openForm}
@@ -347,18 +409,24 @@ export default function Dashboard() {
             ) : null}
           </div>
 
+          {/* Loading indicator shown while fetching DB data */}
+          {loading && <div className="p-4 text-center text-slate-600 dark:text-slate-300">Loading...</div>}
+
           {/* DASHBOARD TABLE (desktop) */}
-          {selectedTab === 'dashboard' && (
+          {selectedTab === 'dashboard' && !loading && (
             <>
+              {/* Small stats cards row (hidden on mobile). THEME.cardDark controls visual style */}
               <div className="hidden md:grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
                 <div className={THEME.cardDark}>
-                  <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold text-green-600">READY TO BILL</p>
-                  <p className="text-3xl font-bold mt-2">$600.00</p>
+                  <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold text-[rgb(58,99,83)]">READY TO BILL</p>
+                  <p className="text-3xl font-bold mt-2">${fakeStats.avgIncomePerMonth.toLocaleString()}</p>
                 </div>
               </div>
 
+              {/* Table wrapper (THEME.tableWrapDark provides background, rounding, overflow) */}
               <div className={THEME.tableWrapDark}>
                 <table className="w-full">
+                  {/* Table head (THEME.tableHeadDark adjusts color in dark mode) */}
                   <thead className={THEME.tableHeadDark}>
                     <tr>
                       <th className="p-4 text-left font-medium">Address</th>
@@ -366,9 +434,12 @@ export default function Dashboard() {
                       <th className="p-4 text-right">Action</th>
                     </tr>
                   </thead>
+
+                  {/* Table body: THEME.bodyDivideDark controls row dividers */}
                   <tbody className={THEME.bodyDivideDark}>
                     {properties.map((prop) => (
                       <React.Fragment key={prop.id}>
+                        {/* Row: clicking toggles expansion. hover:bg classes provide feedback */}
                         <tr
                           onClick={() => toggleExpand(prop.id)}
                           className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition cursor-pointer"
@@ -376,11 +447,13 @@ export default function Dashboard() {
                         >
                           <td className="p-4 font-medium">{prop.address}</td>
                           <td className="p-4">
+                            {/* Status badge uses THEME.soldBadge or THEME.activeBadge */}
                             <span className={`px-3 py-1 rounded-full text-xs font-bold ${prop.status === 'Sold' ? THEME.soldBadge : THEME.activeBadge}`}>
                               {prop.status}
                             </span>
                           </td>
                           <td className="p-4 text-right">
+                            {/* Email button shown only for Sold items. Uses THEME.btnAccentGreen */}
                             {prop.status === 'Sold' && (
                               <button
                                 onClick={(e) => handleEmailEscrow(e, prop)}
@@ -392,9 +465,11 @@ export default function Dashboard() {
                           </td>
                         </tr>
 
+                        {/* Expanded details row shown when ID is in expandedIds */}
                         {expandedIds.includes(prop.id) && (
                           <tr key={`${prop.id}-details`} className="bg-slate-50 dark:bg-slate-800">
                             <td colSpan="3" className="p-4 text-sm text-slate-700 dark:text-slate-300">
+                              {/* Details layout splits into price, agent and actions */}
                               <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                                 <div>
                                   <p className="text-xs text-slate-500 dark:text-slate-400">Price</p>
@@ -405,12 +480,15 @@ export default function Dashboard() {
                                   <p className="font-medium">{prop.agent}</p>
                                 </div>
                                 <div className="flex items-center gap-3">
+                                  {/* View button uses THEME.btnPrimary */}
                                   <button
                                     onClick={(e) => { e.stopPropagation(); }}
                                     className={`px-4 py-2 ${THEME.btnPrimary} ${THEME.btnPrimaryDark} text-white rounded-md text-sm`}
                                   >
                                     View
                                   </button>
+
+                                  {/* Email action uses neutral bg for contrast in dark mode */}
                                   <button
                                     onClick={(e) => handleEmailEscrow(e, prop)}
                                     className="px-4 py-2 bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-slate-100 rounded-md text-sm flex items-center gap-2"
@@ -436,6 +514,7 @@ export default function Dashboard() {
                     onClick={() => toggleExpand(prop.id)}
                     className="bg-white dark:bg-slate-800 rounded-lg p-4 shadow-sm border border-slate-200 dark:border-[#0b2b20]"
                   >
+                    {/* Top row: address + agent on the left, status + price on the right */}
                     <div className="flex justify-between items-start">
                       <div>
                         <div className="font-medium">{prop.address}</div>
@@ -447,6 +526,7 @@ export default function Dashboard() {
                       </div>
                     </div>
 
+                    {/* Expanded mobile actions */}
                     {expandedIds.includes(prop.id) && (
                       <div className="mt-3 flex gap-2">
                         <button
@@ -470,9 +550,10 @@ export default function Dashboard() {
           )}
 
           {/* CUSTOMERS */}
-          {selectedTab === 'customers' && (
+          {/* Customers view uses THEME.cardDark for consistent panel styling */}
+          {selectedTab === 'customers' && !loading && (
             <>
-              {/* Desktop table */}
+              {/* Desktop table (hidden on mobile) */}
               <div className={THEME.cardDark + " mb-10 hidden md:block"}>
                 <table className="w-full">
                   <thead className={THEME.cardDark}>
@@ -493,12 +574,14 @@ export default function Dashboard() {
                         <td className="p-4 text-slate-600 dark:text-slate-300">{c.company}</td>
                         <td className="p-4 text-right">
                           <div className="inline-flex gap-2">
+                            {/* Edit button uses THEME.btnPrimary */}
                             <button
                               onClick={() => openEditCustomer(c)}
                               className={`px-3 py-1 ${THEME.btnPrimary} ${THEME.btnPrimaryDark} text-white rounded-md text-sm`}
                             >
                               Edit
                             </button>
+                            {/* Delete button with clear red visual */}
                             <button
                               onClick={() => handleDeleteCustomer(c.id)}
                               className="px-3 py-1 bg-red-500 text-white rounded-md text-sm"
@@ -513,7 +596,7 @@ export default function Dashboard() {
                 </table>
               </div>
 
-              {/* Mobile cards */}
+              {/* Mobile customer cards */}
               <div className="md:hidden space-y-4">
                 {customers.map(c => (
                   <article key={c.id} className="bg-white dark:bg-slate-800 rounded-lg p-4 shadow-sm border border-slate-200 dark:border-[#0b2b20]">
@@ -539,23 +622,24 @@ export default function Dashboard() {
           )}
 
           {/* STATISTICS */}
-          {selectedTab === 'statistics' && (
+          {/* Grid of stat cards; THEME.cardDark keeps consistent look with other panels */}
+          {selectedTab === 'statistics' && !loading && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className={THEME.cardDark}>
                 <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">AVG INCOME / MONTH</p>
                 <p className="text-4xl font-bold mt-3">${fakeStats.avgIncomePerMonth.toLocaleString()}</p>
-                <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Sample average monthly income (fake data)</p>
+                <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Sample average monthly income (computed from properties)</p>
               </div>
 
               <div className={THEME.cardDark}>
                 <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">AVG LISTING TIME</p>
                 <p className="text-4xl font-bold mt-3">{fakeStats.avgListingDays} days</p>
-                <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Average time a listing stays active (fake data)</p>
+                <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Average time a listing stays active (placeholder)</p>
               </div>
 
               <div className={THEME.cardDark}>
                 <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">NOTES</p>
-                <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">These statistics are placeholders. We'll hook real analytics / DB queries later to populate accurate metrics.</p>
+                <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">These statistics are derived from properties in the DB. Add more fields to compute richer metrics.</p>
               </div>
             </div>
           )}
@@ -564,11 +648,14 @@ export default function Dashboard() {
 
       {/* FORM MODAL (Add Shoot) */}
       {showForm && (
+        // Backdrop + centered form modal
         <div
           className="fixed inset-0 flex items-center justify-center z-50 p-4"
           onClick={closeForm}
         >
+          {/* translucent background overlay */}
           <div className="absolute inset-0 bg-black/40" />
+          {/* Actual form card: clicking inside should not close modal (stopPropagation used in JSX above) */}
           <form
             onSubmit={handleAddProperty}
             onClick={(e) => e.stopPropagation()}
@@ -576,6 +663,7 @@ export default function Dashboard() {
           >
             <h3 className="text-xl font-bold mb-4">Add New Shoot</h3>
 
+            {/* Form fields: each labeled block groups a field and label */}
             <label className="block mb-2 text-sm">
               <span className="text-slate-600 dark:text-slate-300">Address</span>
               <input
@@ -623,6 +711,7 @@ export default function Dashboard() {
               />
             </label>
 
+            {/* Form actions: cancel and submit */}
             <div className="flex justify-end gap-3">
               <button
                 type="button"
