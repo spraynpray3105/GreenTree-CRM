@@ -404,7 +404,7 @@ export default function Dashboard() {
                 onClick={openForm}
                 className={`${THEME.btnPrimary} ${THEME.btnPrimaryDark} px-6 py-2 rounded-lg font-medium`}
               >
-                + Add New Shoot
+                + Add New Client
               </button>
             ) : null}
           </div>
