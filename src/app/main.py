@@ -15,9 +15,15 @@ from jose import jwt, JWTError
 app = FastAPI()
 
 # CORS: allow credentials so httpOnly cookie auth works from frontend (use restricted origins in prod)
+origins = [
+    "http://localhost:3000",   # dev frontend origin (change if different)
+    "http://localhost:8000",   # optional
+    "https://greentree-crm.onrender.com"  # production frontend
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # for demo; replace with your frontend origin
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -81,7 +87,7 @@ class PropertyCreate(BaseModel):
 # Auth endpoints
 # ----------------------
 @app.post("/register", status_code=201)
-def register(user_in: UserCreate, db: Session = Depends(get_db)):
+def register(user_in: UserCreate, response: Response, db: Session = Depends(get_db)):
     # check by email if provided, otherwise by name
     if user_in.email:
         exists = db.query(User).filter(User.email == user_in.email).first()
@@ -92,16 +98,28 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Username already registered")
 
     hashed = hash_password(user_in.password)
+    # store proper datetime object (DB column is DateTime)
     user = User(
         name=user_in.name,
         email=user_in.email,
         hashed_password=hashed,
-        created_at=datetime.utcnow().isoformat()
+        created_at=datetime.utcnow()
     )
     db.add(user)
     db.commit()
     db.refresh(user)
-    return {"id": user.id, "name": user.name, "email": user.email}
+
+    # create token and return it so frontend can store/use it (also set cookie for compat)
+    token = create_access_token({"sub": user.name, "user_id": user.id})
+    response.set_cookie(
+        key="access_token",
+        value=token,
+        httponly=True,
+        samesite="lax",
+        secure=False,
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    )
+    return {"id": user.id, "name": user.name, "email": user.email, "access_token": token}
 
 @app.post("/login")
 def login(creds: UserLogin, response: Response, db: Session = Depends(get_db)):
@@ -116,7 +134,7 @@ def login(creds: UserLogin, response: Response, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     token = create_access_token({"sub": user.name, "user_id": user.id})
-    # Set httpOnly cookie. In production set secure=True and proper domain.
+    # Set httpOnly cookie for compatibility, but also return token in body
     response.set_cookie(
         key="access_token",
         value=token,
@@ -125,7 +143,7 @@ def login(creds: UserLogin, response: Response, db: Session = Depends(get_db)):
         secure=False,  # change to True when serving over HTTPS
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
-    return {"message": "login successful"}
+    return {"message": "login successful", "access_token": token}
 
 # Helper dependency: reads token from cookie or Authorization header
 def get_current_user(request: Request, db: Session = Depends(get_db)):

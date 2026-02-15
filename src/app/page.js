@@ -3,8 +3,8 @@ import React, { useState, useEffect } from 'react';
 import { Home, DollarSign, Mail, Search, Moon, Sun, BarChart, Menu, X } from 'lucide-react';
 
 export default function Dashboard() {
-  // API base (change if needed)
-  const API_BASE = "https://greentree-crm.onrender.com";
+  // API base (change if needed). Prefer env in Next; fallback to localhost.
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
 
   // THEME: central place for classes and colors used across the page.
   // Edit these values to change styling app-wide.
@@ -80,13 +80,15 @@ export default function Dashboard() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // On mount: check session (/me). credentials: 'include' so httpOnly cookie is sent.
+  // On mount: try to get token from localStorage and fetch /me with Authorization header
   useEffect(() => {
     let mounted = true;
     const checkMe = async () => {
       setLoadingMe(true);
       try {
-        const res = await fetch(`${API_BASE}/me`, { credentials: 'include' });
+        const token = localStorage.getItem("access_token");
+        const headers = token ? { "Authorization": `Bearer ${token}` } : {};
+        const res = await fetch(`${API_BASE}/me`, { headers });
         if (res.ok) {
           const data = await res.json();
           if (mounted) setCurrentUser(data);
@@ -187,13 +189,12 @@ export default function Dashboard() {
     setForm(prev => ({ ...prev, [name]: value }));
   };
 
-  // Login handler (sends credentials and relies on httpOnly cookie set by server)
+  // Login handler: receive token in response, store in localStorage and fetch /me with Authorization header
   const handleLogin = async (e) => {
     e.preventDefault();
     try {
       const res = await fetch(`${API_BASE}/login`, {
         method: 'POST',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: loginForm.name, password: loginForm.password })
       });
@@ -202,11 +203,13 @@ export default function Dashboard() {
         alert(err?.detail || "Login failed");
         return;
       }
-      // refresh session user
-      const me = await fetch(`${API_BASE}/me`, { credentials: 'include' });
-      if (me.ok) {
-        const data = await me.json();
-        setCurrentUser(data);
+      const body = await res.json();
+      if (body.access_token) {
+        localStorage.setItem("access_token", body.access_token);
+        const me = await fetch(`${API_BASE}/me`, { headers: { "Authorization": `Bearer ${body.access_token}` }});
+        if (me.ok) setCurrentUser(await me.json());
+      } else {
+        alert("Login succeeded but no token returned");
       }
     } catch (err) {
       console.error("Login error", err);
@@ -214,15 +217,13 @@ export default function Dashboard() {
     }
   };
 
-  // Register handler: creates user then auto-logins so cookie is set
+  // Register handler: create user, get token from response (backend now returns it), store and set user
   const handleRegister = async (e) => {
     e.preventDefault();
     try {
-      // create user
       const res = await fetch(`${API_BASE}/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ name: regForm.name, email: regForm.email, password: regForm.password })
       });
       if (!res.ok) {
@@ -230,12 +231,18 @@ export default function Dashboard() {
         alert(err?.detail || "Register failed");
         return;
       }
-
-      // auto-login to receive httpOnly cookie
+      const body = await res.json();
+      if (body.access_token) {
+        localStorage.setItem("access_token", body.access_token);
+        const me = await fetch(`${API_BASE}/me`, { headers: { "Authorization": `Bearer ${body.access_token}` }});
+        if (me.ok) setCurrentUser(await me.json());
+        setShowRegister(false);
+        return;
+      }
+      // fallback: try to auto-login if backend didn't return token
       const loginRes = await fetch(`${API_BASE}/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ name: regForm.name, password: regForm.password })
       });
       if (!loginRes.ok) {
@@ -243,11 +250,11 @@ export default function Dashboard() {
         setShowRegister(false);
         return;
       }
-
-      // fetch /me and set user state
-      const me = await fetch(`${API_BASE}/me`, { credentials: 'include' });
-      if (me.ok) {
-        setCurrentUser(await me.json());
+      const loginBody = await loginRes.json();
+      if (loginBody.access_token) {
+        localStorage.setItem("access_token", loginBody.access_token);
+        const me = await fetch(`${API_BASE}/me`, { headers: { "Authorization": `Bearer ${loginBody.access_token}` }});
+        if (me.ok) setCurrentUser(await me.json());
       }
       setShowRegister(false);
     } catch (err) {
@@ -256,10 +263,20 @@ export default function Dashboard() {
     }
   };
 
+  // Logout: clear token and local state
+  const handleLogout = async () => {
+    localStorage.removeItem("access_token");
+    setCurrentUser(null);
+  };
+
   // POST new property to API and update local state (include credentials so server can validate auth)
   const handleAddProperty = async (e) => {
     e.preventDefault();
     if (!form.address.trim()) return alert("Address is required");
+    const token = localStorage.getItem("access_token");
+    const headers = { "Content-Type": "application/json" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
     const payload = {
       address: form.address.trim(),
       status: form.status,
@@ -270,8 +287,7 @@ export default function Dashboard() {
     try {
       const res = await fetch(`${API_BASE}/properties`, {
         method: "POST",
-        credentials: "include", // ensure cookie is sent
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify(payload)
       });
       if (!res.ok) {
