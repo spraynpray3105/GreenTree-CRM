@@ -1,6 +1,19 @@
 from suncalc import get_position, get_times
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import math
+
+# Optional timezone lookup (best-effort). If timezonefinder is available we'll use
+# it to convert times to the location's local timezone. If not available we fall
+# back to the server local timezone.
+try:
+    from timezonefinder import TimezoneFinder
+    TF = TimezoneFinder()
+except Exception:
+    TF = None
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 
 
 def get_optimal_times(lat, lng, date_str=None):
@@ -21,9 +34,41 @@ def get_optimal_times(lat, lng, date_str=None):
 
     times = get_times(date, lat, lng) or {}
 
+    # Determine target timezone for formatting. Try timezonefinder first.
+    tzinfo = None
+    if TF:
+        try:
+            tzname = TF.timezone_at(lat=lat, lng=lng)
+            if tzname and ZoneInfo:
+                tzinfo = ZoneInfo(tzname)
+        except Exception:
+            tzinfo = None
+    # fallback to server local tz
+    if tzinfo is None:
+        try:
+            tzinfo = datetime.now().astimezone().tzinfo
+        except Exception:
+            tzinfo = timezone.utc
+
     # Normalize commonly used keys; fallback to None when not found
     sunrise = times.get('sunrise') or times.get('sunriseBegin') or times.get('sunriseEnd')
     sunset = times.get('sunset') or times.get('sunsetEnd') or times.get('sunsetStart')
+
+    # Ensure datetimes are timezone-aware: treat naive datetimes from suncalc as UTC
+    def ensure_tz(dt):
+        if not dt:
+            return None
+        try:
+            if dt.tzinfo is None:
+                # many suncalc implementations return naive datetimes in UTC
+                dt = dt.replace(tzinfo=timezone.utc)
+            # convert to target tz
+            return dt.astimezone(tzinfo)
+        except Exception:
+            return dt
+
+    sunrise = ensure_tz(sunrise)
+    sunset = ensure_tz(sunset)
 
     # Determine an evening golden-hour window: prefer 60 minutes ending at sunset
     golden_start = None
