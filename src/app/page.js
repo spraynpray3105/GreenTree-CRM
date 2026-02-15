@@ -1286,23 +1286,57 @@ export default function Dashboard() {
 
           {/* Grid of stat cards; THEME.cardDark keeps consistent look with other panels */}
           {selectedTab === 'statistics' && !loading && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className={THEME.cardDark}>
-                <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">AVG INCOME / MONTH</p>
-                <p className="text-4xl font-bold mt-3">${fakeStats.avgIncomePerMonth.toLocaleString()}</p>
-                <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Sample average monthly income (computed from properties)</p>
-              </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {(() => {
+                // derive useful statistics for a real-estate photography business
+                const parsed = Array.isArray(statsData) ? statsData.map(s => ({
+                  date: s.date,
+                  shoots: Number(s.shoots_count ?? s.shoots ?? 0),
+                  income: Number(s.income_total ?? s.income ?? 0)
+                })) : [];
+                const days = parsed.length || 30;
+                const totalShoots = parsed.reduce((sum, p) => sum + (p.shoots || 0), 0);
+                const totalIncome = parsed.reduce((sum, p) => sum + (p.income || 0), 0);
+                const avgShootsPerDay = days ? (totalShoots / days) : 0;
+                const avgIncomePerShoot = totalShoots ? (totalIncome / totalShoots) : 0;
+                const totalProperties = Array.isArray(properties) ? properties.length : 0;
+                const soldCount = Array.isArray(properties) ? properties.filter(p => (p.status || '').toLowerCase() === 'sold').length : 0;
+                const soldPercent = totalProperties ? Math.round((soldCount / totalProperties) * 100) : 0;
 
-              <div className={THEME.cardDark}>
-                <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">AVG LISTING TIME</p>
-                <p className="text-4xl font-bold mt-3">{fakeStats.avgListingDays} days</p>
-                <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Average time a listing stays active (placeholder)</p>
-              </div>
+                return (
+                  <>
+                    <div className={THEME.cardDark}>
+                      <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">Total shoots (last {parsed.length || 30} days)</p>
+                      <p className="text-3xl font-bold mt-3">{totalShoots}</p>
+                      <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Count of completed photo shoots recorded in the statistics table.</p>
+                    </div>
 
-              <div className={THEME.cardDark}>
-                <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">NOTES</p>
-                <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">These statistics are derived from properties in the DB. Add more fields to compute richer metrics.</p>
-              </div>
+                    <div className={THEME.cardDark}>
+                      <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">Avg shoots / day</p>
+                      <p className="text-3xl font-bold mt-3">{avgShootsPerDay.toFixed(1)}</p>
+                      <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Average shoots per day over the selected window.</p>
+                    </div>
+
+                    <div className={THEME.cardDark}>
+                      <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">Total income (last {parsed.length || 30} days)</p>
+                      <p className="text-3xl font-bold mt-3">${Math.round(totalIncome).toLocaleString()}</p>
+                      <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Revenue collected for shoots in the period.</p>
+                    </div>
+
+                    <div className={THEME.cardDark}>
+                      <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">Avg income per shoot</p>
+                      <p className="text-3xl font-bold mt-3">${avgIncomePerShoot.toFixed(0)}</p>
+                      <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Total income divided by total shoots (useful for pricing decisions).</p>
+                    </div>
+
+                    <div className={THEME.cardDark}>
+                      <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">Listings sold %</p>
+                      <p className="text-3xl font-bold mt-3">{soldPercent}%</p>
+                      <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Percent of properties marked Sold (from current properties data).</p>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           )}
         </main>

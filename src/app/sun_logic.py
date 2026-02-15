@@ -1,43 +1,88 @@
 from suncalc import get_position, get_times
-from datetime import datetime
-import pandas as pd
+from datetime import datetime, timedelta
 import math
 
+
 def get_optimal_times(lat, lng, date_str=None):
+    """Return sunrise/sunset and a practical golden-hour window (evening preferred).
+
+    The suncalc library can return multiple named times. To avoid mismatches
+    (for example golden-hour keys differing between implementations), we
+    compute a conservative evening golden hour as the 60-minute window ending
+    at sunset when sunset is available. We then compute the sun azimuth at the
+    midpoint of that window.
+
+    Returns a dict with formatted times (strings) and numeric azimuth in degrees.
+    """
     if date_str:
         date = datetime.strptime(date_str, '%Y-%m-%d')
     else:
         date = datetime.now()
 
-    # Get sunrise, sunset, and "Golden Hour"
-    times = get_times(date, lat, lng)
-    
-    # Logic: Real estate photography is best when the sun is at a 45-degree angle 
-    # to the front of the house to avoid "flat" lighting or "heavy" shadows.
-    # compute sun position at golden hour (if available) to estimate azimuth
+    times = get_times(date, lat, lng) or {}
+
+    # Normalize commonly used keys; fallback to None when not found
+    sunrise = times.get('sunrise') or times.get('sunriseBegin') or times.get('sunriseEnd')
+    sunset = times.get('sunset') or times.get('sunsetEnd') or times.get('sunsetStart')
+
+    # Determine an evening golden-hour window: prefer 60 minutes ending at sunset
+    golden_start = None
+    golden_end = None
+    if sunset:
+        try:
+            golden_end = sunset
+            golden_start = sunset - timedelta(minutes=60)
+            # ensure golden_start is after sunrise (if sunrise exists)
+            if sunrise and golden_start < sunrise:
+                # if that happens (very short day), clamp to sunrise -> sunset window
+                golden_start = sunrise
+        except Exception:
+            golden_start = None
+            golden_end = None
+    else:
+        # As a fallback try to use any 'goldenHour' keys provided by suncalc
+        gh = times.get('goldenHour') or times.get('goldenHourEnd') or times.get('golden_hour')
+        if gh:
+            # treat this as the golden_end and set start to 60 minutes earlier
+            try:
+                golden_end = gh
+                golden_start = gh - timedelta(minutes=60)
+            except Exception:
+                golden_start = None
+                golden_end = None
+
+    # Compute azimuth at midpoint of golden window when possible
     azimuth_deg = None
     front_facing = None
-    try:
-        gh = times.get('golden_hour') or times.get('sunrise')
-        pos = get_position(gh, lat, lng)
-        # suncalc returns azimuth in radians; convert to degrees
-        az = pos.get('azimuth')
-        if az is not None:
-            azimuth_deg = (math.degrees(az) + 360) % 360
-            # convert to simple 8-point compass
-            directions = ['North', 'North-East', 'East', 'South-East', 'South', 'South-West', 'West', 'North-West']
-            idx = int((azimuth_deg + 22.5) // 45) % 8
-            front_facing = directions[idx]
-    except Exception:
-        azimuth_deg = None
-        front_facing = None
+    if golden_start and golden_end:
+        try:
+            midpoint = golden_start + (golden_end - golden_start) / 2
+            pos = get_position(midpoint, lat, lng)
+            az = pos.get('azimuth') if isinstance(pos, dict) else getattr(pos, 'azimuth', None)
+            if az is not None:
+                # suncalc returns azimuth in radians; convert to degrees 0..360
+                azimuth_deg = (math.degrees(az) + 360) % 360
+                directions = ['North', 'North-East', 'East', 'South-East', 'South', 'South-West', 'West', 'North-West']
+                idx = int((azimuth_deg + 22.5) // 45) % 8
+                front_facing = directions[idx]
+        except Exception:
+            azimuth_deg = None
+            front_facing = None
 
-    sunrise_str = times['sunrise'].strftime('%I:%M %p') if times.get('sunrise') else None
-    golden_str = times['golden_hour'].strftime('%I:%M %p') if times.get('golden_hour') else None
-    sunset_str = times['sunset'].strftime('%I:%M %p') if times.get('sunset') else None
-    best_window = f"{times['sunrise'].strftime('%H:%M')} - {times['golden_hour'].strftime('%H:%M')}" if times.get('sunrise') and times.get('golden_hour') else None
+    # Formatting: use consistent 12-hour and 24-hour display where appropriate
+    def fmt(dt, fmt_str='%I:%M %p'):
+        try:
+            return dt.strftime(fmt_str)
+        except Exception:
+            return None
 
-    # simple warning: after sunset the exterior will be in shadow; present a human-friendly message
+    sunrise_str = fmt(sunrise) if sunrise else None
+    sunset_str = fmt(sunset) if sunset else None
+    golden_str = fmt(golden_start) if golden_start else None
+    best_window = None
+    if golden_start and golden_end:
+        best_window = f"{golden_start.strftime('%I:%M %p')} - {golden_end.strftime('%I:%M %p')}"
+
     warning = None
     if sunset_str:
         warning = f"House may be in shadow after {sunset_str}."
