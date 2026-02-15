@@ -1,10 +1,10 @@
 "use client";
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from "react";
 import { Home, DollarSign, Mail, Search, Moon, Sun, BarChart, Menu, X } from 'lucide-react';
 
 export default function Dashboard() {
-  // API base (change if needed). Prefer env in Next; fallback to localhost.
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+  // prefer env, then deployed, then local
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "https://greentree-crm.onrender.com" || "http://localhost:8000";
 
   // THEME: central place for classes and colors used across the page.
   // Edit these values to change styling app-wide.
@@ -46,7 +46,9 @@ export default function Dashboard() {
   const [expandedIds, setExpandedIds] = useState([]); // expanded rows/cards
   const [properties, setProperties] = useState([]); // properties from DB
   const [customers, setCustomers] = useState([]); // derived customers list
+  const [photographers, setPhotographers] = useState([]); // photographers from DB
   const [loading, setLoading] = useState(true); // global loading indicator
+  const [serverError, setServerError] = useState(null);
 
   // AUTH state: currentUser and login/register forms
   const [currentUser, setCurrentUser] = useState(null); // populated from /me
@@ -61,8 +63,14 @@ export default function Dashboard() {
     address: "",
     status: "Active",
     price: "",
-    agent: ""
+    agent: "",
+    photographer_id: "",
+    company: ""
   });
+
+  // Photographers simple add form UI
+  const [showPhotogForm, setShowPhotogForm] = useState(false);
+  const [photogForm, setPhotogForm] = useState({ name: "", email: "", phone: "", company: "" });
 
   // Customer edit state
   const [editingCustomer, setEditingCustomer] = useState(null);
@@ -107,25 +115,31 @@ export default function Dashboard() {
 
   // Fetch properties from API and derive customers + simple stats
   useEffect(() => {
+    let mounted = true;
     const fetchProperties = async () => {
       setLoading(true);
+      setServerError(null);
+      const url = `${API_BASE.replace(/\/$/, "")}/properties`;
       try {
-        const res = await fetch(`${API_BASE}/properties`);
-        if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
+        const headers = {};
+        const token = localStorage.getItem("access_token");
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+
+        const res = await fetch(url, { headers, mode: "cors" });
+        if (!res.ok) {
+          const txt = await res.text().catch(()=>null);
+          throw new Error(txt || `${res.status} ${res.statusText}`);
+        }
         const data = await res.json();
-        // normalize DB entries
-        const normalized = data.map(p => ({
-          id: p.id,
-          address: p.address || "",
-          status: p.status || "Active",
-          price: typeof p.price === 'number' ? p.price : parseFloat(p.price) || 0,
-          agent: p.agent || ""
-        }));
-        setProperties(normalized);
+        if (!mounted) return;
+        setProperties(Array.isArray(data) ? data : []);
+
+  // if photographers are present on returned properties, keep them in sync lightly
+  // (we also fetch photographers separately below)
 
         // derive customers from unique agent names
         const seen = new Map();
-        normalized.forEach(p => {
+        data.forEach(p => {
           const name = (p.agent || "").trim();
           if (!name) return;
           const key = name.toLowerCase();
@@ -136,19 +150,41 @@ export default function Dashboard() {
         setCustomers(Array.from(seen.values()));
 
         // derive simple stats for display
-        const totalIncome = normalized.reduce((s, p) => s + (p.price || 0), 0);
-        const avgIncome = normalized.length ? Math.round(totalIncome / normalized.length) : 0;
+        const totalIncome = data.reduce((s, p) => s + (p.price || 0), 0);
+        const avgIncome = data.length ? Math.round(totalIncome / data.length) : 0;
         const avgDays = 18; // placeholder
         setFakeStats({ avgIncomePerMonth: avgIncome, avgListingDays: avgDays });
       } catch (err) {
         console.error("Failed to load properties:", err);
+        if (mounted) setServerError(String(err?.message || err));
       } finally {
-        setLoading(false);
+        if (mounted) setLoading(false);
       }
     };
 
     fetchProperties();
-  }, []);
+    return () => { mounted = false; };
+  }, [API_BASE]);
+
+  // Fetch photographers list from API (separate endpoint)
+  useEffect(() => {
+    let mounted = true;
+    const fetchPhotographers = async () => {
+      try {
+        const token = localStorage.getItem("access_token");
+        const headers = token ? { "Authorization": `Bearer ${token}` } : {};
+        const res = await fetch(`${API_BASE.replace(/\/$/, "")}/photographers`, { headers });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!mounted) return;
+        setPhotographers(Array.isArray(data) ? data : []);
+      } catch (err) {
+        console.error('Failed to fetch photographers', err);
+      }
+    };
+    fetchPhotographers();
+    return () => { mounted = false; };
+  }, [API_BASE]);
 
   // helper to rebuild customers when properties change
   const rebuildCustomersFromProperties = (props) => {
@@ -187,6 +223,50 @@ export default function Dashboard() {
   const handleFormChange = (e) => {
     const { name, value } = e.target;
     setForm(prev => ({ ...prev, [name]: value }));
+  };
+
+  // Photographer CRUD helpers (frontend)
+  const handlePhotogFormChange = (e) => {
+    const { name, value } = e.target;
+    setPhotogForm(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleCreatePhotographer = async (e) => {
+    e.preventDefault();
+    const token = localStorage.getItem('access_token');
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    try {
+      const res = await fetch(`${API_BASE}/photographers`, { method: 'POST', headers, body: JSON.stringify(photogForm) });
+      if (!res.ok) {
+        const txt = await res.text().catch(()=>null);
+        throw new Error(txt || `Create photog failed ${res.status}`);
+      }
+      const created = await res.json();
+      setPhotographers(prev => [created, ...prev]);
+      setPhotogForm({ name: '', email: '', phone: '', company: '' });
+      setShowPhotogForm(false);
+    } catch (err) {
+      console.error('Failed to create photographer', err);
+      alert('Failed to create photographer. See console.');
+    }
+  };
+
+  const handleDeletePhotographer = async (id) => {
+    if (!confirm('Delete this photographer?')) return;
+    const token = localStorage.getItem('access_token');
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    try {
+      const res = await fetch(`${API_BASE}/photographers/${id}`, { method: 'DELETE', headers });
+      if (!res.ok) throw new Error(`Delete failed ${res.status}`);
+      setPhotographers(prev => prev.filter(p => p.id !== id));
+      // also clear photographer reference from properties in state
+      setProperties(prev => prev.map(pr => pr.photographer_id === id ? { ...pr, photographer_id: null, photographer: null } : pr));
+    } catch (err) {
+      console.error('Failed to delete photographer', err);
+      alert('Failed to delete photographer');
+    }
   };
 
   // Login handler: receive token in response, store in localStorage and fetch /me with Authorization header
@@ -281,7 +361,9 @@ export default function Dashboard() {
       address: form.address.trim(),
       status: form.status,
       price: parseFloat(form.price) || 0,
-      agent: form.agent.trim()
+      agent: form.agent.trim(),
+      photographer_id: form.photographer_id ? (isNaN(Number(form.photographer_id)) ? null : Number(form.photographer_id)) : null,
+      company: form.company || null
     };
 
     try {
@@ -407,7 +489,7 @@ export default function Dashboard() {
             {/* Header title (uses THEME.headerTitle for typography) */}
             <div className={THEME.headerTitle}>Green Tree</div>
             {/* Small subtitle showing current selected tab */}
-            <div className={THEME.headerSubtitle}>{selectedTab === 'dashboard' ? 'Dashboard' : selectedTab === 'customers' ? 'Customers' : 'Statistics'}</div>
+            <div className={THEME.headerSubtitle}>{selectedTab === 'dashboard' ? 'Dashboard' : selectedTab === 'customers' ? 'Customers' : selectedTab === 'photographers' ? 'Photographers' : 'Statistics'}</div>
           </div>
 
           {/* Right area: dark mode toggle and primary add button */}
@@ -448,6 +530,15 @@ export default function Dashboard() {
               className={`flex items-center gap-3 ${selectedTab === 'customers' ? THEME.tabSelected : THEME.tabDefault}`}
             >
               <DollarSign size={20}/> Customers
+            </a>
+
+            {/* Photographers link */}
+            <a
+              href="#"
+              onClick={(e) => { e.preventDefault(); setSelectedTab('photographers'); }}
+              className={`flex items-center gap-3 ${selectedTab === 'photographers' ? THEME.tabSelected : THEME.tabDefault}`}
+            >
+              <Menu size={20}/> Photographers
             </a>
 
             {/* Statistics link */}
@@ -506,6 +597,14 @@ export default function Dashboard() {
                 <DollarSign size={18}/> Customers
               </a>
 
+                <a
+                  href="#"
+                  onClick={(e) => { e.preventDefault(); setSelectedTab('photographers'); setShowSidebar(false); }}
+                  className={`flex items-center gap-3 ${selectedTab === 'photographers' ? THEME.tabMobileSelected : THEME.tabDefault}`}
+                >
+                  <Menu size={18}/> Photographers
+                </a>
+
               <a
                 href="#"
                 onClick={(e) => { e.preventDefault(); setSelectedTab('statistics'); setShowSidebar(false); }}
@@ -545,13 +644,15 @@ export default function Dashboard() {
             <div>
               {/* Page title and subtitle use THEME.pageTitle / THEME.pageSubtitle */}
               <h2 className={THEME.pageTitle}>
-                {selectedTab === 'dashboard' ? 'Main Dashboard' : selectedTab === 'customers' ? 'Customer Database' : 'Statistics'}
+                {selectedTab === 'dashboard' ? 'Main Dashboard' : selectedTab === 'customers' ? 'Customer Database' : selectedTab === 'photographers' ? 'Photographers' : 'Statistics'}
               </h2>
               <p className={THEME.pageSubtitle}>
                 {selectedTab === 'dashboard'
-                  ? 'Manage your real estate photography escrow.'
+                  ? `Welcome, ${currentUser?.name || loginForm.name || 'Guest'}. Manage your real estate photography escrow.`
                   : selectedTab === 'customers'
                   ? 'Example customer records. Will be connected to MySQL later.'
+                  : selectedTab === 'photographers'
+                  ? 'Manage photographers who shoot your properties.'
                   : 'Summary statistics (fake data for now).'}
               </p>
             </div>
@@ -779,6 +880,83 @@ export default function Dashboard() {
             </>
           )}
 
+          {/* PHOTOGRAPHERS */}
+          {selectedTab === 'photographers' && !loading && (
+            <>
+              <div className={THEME.cardDark + " mb-6"}>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-semibold">Photographers</h3>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setShowPhotogForm(!showPhotogForm)} className={`px-3 py-1 rounded-md ${THEME.btnPrimary} ${THEME.btnPrimaryDark} text-white`}>{showPhotogForm ? 'Close' : '+ Add Photographer'}</button>
+                  </div>
+                </div>
+
+                {showPhotogForm && (
+                  <form onSubmit={handleCreatePhotographer} className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+                    <input name="name" placeholder="Name" value={photogForm.name} onChange={handlePhotogFormChange} className={`${THEME.inputDark} p-2`} required />
+                    <input name="email" placeholder="Email" value={photogForm.email} onChange={handlePhotogFormChange} className={`${THEME.inputDark} p-2`} />
+                    <input name="phone" placeholder="Phone" value={photogForm.phone} onChange={handlePhotogFormChange} className={`${THEME.inputDark} p-2`} />
+                    <div className="flex gap-2">
+                      <input name="company" placeholder="Company" value={photogForm.company} onChange={handlePhotogFormChange} className={`${THEME.inputDark} p-2 flex-1`} />
+                      <button type="submit" className={`px-4 py-2 rounded-md ${THEME.btnPrimary} ${THEME.btnPrimaryDark} text-white`}>Save</button>
+                    </div>
+                  </form>
+                )}
+
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className={THEME.tableHeadDark}>
+                      <tr>
+                        <th className="p-4 text-left font-medium">Name</th>
+                        <th className="p-4 text-left font-medium">Email</th>
+                        <th className="p-4 text-left font-medium">Phone</th>
+                        <th className="p-4 text-left font-medium">Company</th>
+                        <th className="p-4 text-right font-medium">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y dark:divide-slate-700">
+                      {photographers.map(p => (
+                        <tr key={p.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition">
+                          <td className="p-4 font-medium">{p.name}</td>
+                          <td className="p-4 text-slate-600 dark:text-slate-300">{p.email}</td>
+                          <td className="p-4 text-slate-600 dark:text-slate-300">{p.phone}</td>
+                          <td className="p-4 text-slate-600 dark:text-slate-300">{p.company}</td>
+                          <td className="p-4 text-right">
+                            <div className="inline-flex gap-2">
+                              <button onClick={() => handleDeletePhotographer(p.id)} className="px-3 py-1 bg-red-500 text-white rounded-md text-sm">Delete</button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* mobile list */}
+              <div className="md:hidden space-y-4">
+                {photographers.map(p => (
+                  <article key={p.id} className="bg-white dark:bg-slate-800 rounded-lg p-4 shadow-sm border border-slate-200 dark:border-[#0b2b20]">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <div className="font-medium">{p.name}</div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400">{p.company}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-sm text-slate-500 dark:text-slate-400">{p.phone}</div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400">{p.email}</div>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 flex gap-2">
+                      <button onClick={() => handleDeletePhotographer(p.id)} className="flex-1 px-3 py-2 bg-red-500 text-white rounded-md text-sm">Delete</button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </>
+          )}
+
           {/* STATISTICS */}
           {/* Grid of stat cards; THEME.cardDark keeps consistent look with other panels */}
           {selectedTab === 'statistics' && !loading && (
@@ -867,6 +1045,26 @@ export default function Dashboard() {
                 onChange={handleFormChange}
                 className={`mt-1 block w-full ${THEME.inputDark}`}
               />
+            </label>
+
+            <label className="block mb-2 text-sm">
+              <span className="text-slate-600 dark:text-slate-300">Company</span>
+              <input
+                name="company"
+                value={form.company}
+                onChange={handleFormChange}
+                className={`mt-1 block w-full ${THEME.inputDark}`}
+              />
+            </label>
+
+            <label className="block mb-4 text-sm">
+              <span className="text-slate-600 dark:text-slate-300">Photographer</span>
+              <select name="photographer_id" value={form.photographer_id || ''} onChange={handleFormChange} className={`mt-1 block w-full ${THEME.inputDark}`}>
+                <option value="">(none)</option>
+                {photographers.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}{p.company ? ` — ${p.company}` : ''}</option>
+                ))}
+              </select>
             </label>
 
             {/* Form actions: cancel and submit */}

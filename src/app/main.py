@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from datetime import datetime, timedelta
 import os
 
-from database import SessionLocal, Property, User  # ensure User model is defined in database.py
+from database import SessionLocal, Property, User, Photographer  # ensure Photographer model is available
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -93,6 +93,14 @@ class PropertyCreate(BaseModel):
     status: str = "Active"
     price: float = 0
     agent: str | None = ""
+    photographer_id: int | None = None
+    company: str | None = None
+
+class PhotographerCreate(BaseModel):
+    name: str
+    email: str | None = None
+    phone: str | None = None
+    company: str | None = None
 
 # ----------------------
 # Auth endpoints
@@ -195,9 +203,48 @@ def create_property(prop_data: PropertyCreate, current_user: User = Depends(get_
         address=prop_data.address,
         status=prop_data.status,
         price=prop_data.price,
-        agent=prop_data.agent
+        agent=prop_data.agent,
+        photographer_id=prop_data.photographer_id,
+        company=prop_data.company
     )
     db.add(new_prop)
     db.commit()
     db.refresh(new_prop)
     return new_prop
+
+
+# ----------------------
+# Photographers endpoints
+# ----------------------
+@app.get("/photographers")
+def list_photographers(db: Session = Depends(get_db)):
+    return db.query(Photographer).all()
+
+
+@app.post("/photographers", status_code=201)
+def create_photographer(p: PhotographerCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # require auth to create photographers
+    # basic uniqueness check by email if provided
+    if p.email:
+        exists = db.query(Photographer).filter(Photographer.email == p.email).first()
+        if exists:
+            raise HTTPException(status_code=400, detail="Photographer with that email already exists")
+    new_p = Photographer(name=p.name, email=p.email, phone=p.phone, company=p.company)
+    db.add(new_p)
+    db.commit()
+    db.refresh(new_p)
+    return new_p
+
+
+@app.delete("/photographers/{photographer_id}")
+def delete_photographer(photographer_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ph = db.query(Photographer).filter(Photographer.id == photographer_id).first()
+    if not ph:
+        raise HTTPException(status_code=404, detail="Photographer not found")
+    # optionally reassign or nullify photographer_id on properties that reference this photographer
+    props = db.query(Property).filter(Property.photographer_id == ph.id).all()
+    for pr in props:
+        pr.photographer_id = None
+    db.delete(ph)
+    db.commit()
+    return {"message": "deleted"}
