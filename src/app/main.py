@@ -157,9 +157,19 @@ class PropertyCreate(BaseModel):
     agent: str | None = ""
     photographer_id: int | None = None
     company: str | None = None
+    image_url: str | None = None
 
 class PaidUpdate(BaseModel):
     paid: bool
+class PropertyUpdate(BaseModel):
+    address: str | None = None
+    status: str | None = None
+    price: float | None = None
+    agent: str | None = None
+    company: str | None = None
+    photographer_id: int | None = None
+    paid: bool | None = None
+    image_url: str | None = None
 class PhotographerCreate(BaseModel):
     name: str
     email: str | None = None
@@ -313,11 +323,11 @@ def get_properties(db: Session = Depends(get_db)):
         db.rollback()
         # try to include `paid` if the column exists; if not, fall back to a select without it
         try:
-            rows = db.execute(text("SELECT id, address, status, price, agent, company, paid FROM properties")).mappings().all()
+            rows = db.execute(text("SELECT id, address, status, price, agent, company, paid, image_url FROM properties")).mappings().all()
             return [dict(r) for r in rows]
         except ProgrammingError:
             db.rollback()
-            rows = db.execute(text("SELECT id, address, status, price, agent, company FROM properties")).mappings().all()
+            rows = db.execute(text("SELECT id, address, status, price, agent, company, image_url FROM properties")).mappings().all()
             # ensure a `paid` key is present for frontend convenience
             out = [dict(r) for r in rows]
             for o in out:
@@ -333,7 +343,8 @@ def create_property(prop_data: PropertyCreate, current_user: User = Depends(get_
         price=prop_data.price,
         agent=prop_data.agent,
         photographer_id=prop_data.photographer_id,
-        company=prop_data.company
+        company=prop_data.company,
+        image_url=prop_data.image_url
     )
     db.add(new_prop)
     db.commit()
@@ -353,14 +364,14 @@ def get_property(property_id: int, db: Session = Depends(get_db)):
         db.rollback()
         # attempt textual selects; first try including `paid`, then without
         try:
-            row = db.execute(text("SELECT id, address, status, price, agent, company, photographer_id, paid FROM properties WHERE id = :id LIMIT 1"), {"id": property_id}).mappings().first()
+            row = db.execute(text("SELECT id, address, status, price, agent, company, photographer_id, paid, image_url FROM properties WHERE id = :id LIMIT 1"), {"id": property_id}).mappings().first()
             if not row:
                 raise HTTPException(status_code=404, detail="Property not found")
             r = dict(row)
             return r
         except ProgrammingError:
             db.rollback()
-            row = db.execute(text("SELECT id, address, status, price, agent, company, photographer_id FROM properties WHERE id = :id LIMIT 1"), {"id": property_id}).mappings().first()
+            row = db.execute(text("SELECT id, address, status, price, agent, company, photographer_id, image_url FROM properties WHERE id = :id LIMIT 1"), {"id": property_id}).mappings().first()
             if not row:
                 raise HTTPException(status_code=404, detail="Property not found")
             r = dict(row)
@@ -385,6 +396,43 @@ def set_property_paid(property_id: int, paid_update: PaidUpdate, current_user: U
         # If the `paid` column doesn't exist, inform the client
         raise HTTPException(status_code=400, detail="Paid flag not available on the database. Run migrations to add the column.")
  
+
+# ----------------------
+# Update property (protected)
+# ----------------------
+@app.patch("/properties/{property_id}")
+def update_property(property_id: int, prop_up: PropertyUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    try:
+        prop = db.query(Property).filter(Property.id == property_id).first()
+        if not prop:
+            raise HTTPException(status_code=404, detail="Property not found")
+
+        # Only update fields that are present in payload
+        if prop_up.address is not None:
+            prop.address = prop_up.address
+        if prop_up.status is not None:
+            prop.status = prop_up.status
+        if prop_up.price is not None:
+            prop.price = float(prop_up.price)
+        if prop_up.agent is not None:
+            prop.agent = prop_up.agent
+        if prop_up.company is not None:
+            prop.company = prop_up.company
+        if prop_up.photographer_id is not None:
+            prop.photographer_id = prop_up.photographer_id
+        if prop_up.paid is not None:
+            prop.paid = bool(prop_up.paid)
+        if prop_up.image_url is not None:
+            prop.image_url = prop_up.image_url
+
+        db.add(prop)
+        db.commit()
+        db.refresh(prop)
+        return prop
+    except ProgrammingError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Database schema not compatible with update. Run migrations.")
+
 
 # ----------------------
 # Photographers endpoints

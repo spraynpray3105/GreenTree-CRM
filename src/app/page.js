@@ -1502,7 +1502,7 @@ export default function Dashboard() {
                                   <td className="p-4"> <span className={`px-3 py-1 rounded-full text-xs font-bold ${l.status === 'Sold' ? THEME.soldBadge : THEME.activeBadge}`}>{l.status}</span></td>
                                   <td className="p-4">${Number(l.price || 0).toFixed(2)}</td>
                                   <td className="p-4">{l.paid ? 'Yes' : 'No'}</td>
-                                  <td className="p-4 text-right"><button onClick={() => router.push(`/property/${l.id}`)} className="px-3 py-1 bg-blue-600 text-white rounded-md">View</button></td>
+                                  <td className="p-4 text-right"><button onClick={() => router.push(`/property/${l.id}`)} className={`${THEME.btnPrimary} px-3 py-1 rounded-md`}>View</button></td>
                                 </tr>
                               ))}
                             </tbody>

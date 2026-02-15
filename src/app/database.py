@@ -32,6 +32,8 @@ class Property(Base):
     agent = Column(String, nullable=True)                        # agent name (optional)
     # optional company associated with the property (e.g., brokerage or client company)
     company = Column(String, nullable=True)
+    # optional image URL for the listing (frontend may show this if present)
+    image_url = Column(String, nullable=True)
     # reference to a photographer (optional)
     photographer_id = Column(Integer, ForeignKey('photographers.id'), nullable=True)
     photographer = relationship('Photographer', back_populates='properties', lazy='joined')
