@@ -40,7 +40,8 @@ def get_db():
 # ----------------------
 # Auth configuration
 # ----------------------
-PWD_CTX = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# use bcrypt_sha256 so very long passwords (or accidental hashes) are pre-hashed safely
+PWD_CTX = CryptContext(schemes=["bcrypt_sha256"], deprecated="auto")
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me")  # set in .env for production
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))  # default 60 minutes (login valid 1 hour)
@@ -49,7 +50,17 @@ def hash_password(password: str) -> str:
     return PWD_CTX.hash(password)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return PWD_CTX.verify(plain_password, hashed_password)
+    """
+    Verify password safely. If the incoming plain_password is too long or invalid
+    for the underlying bcrypt implementation, treat it as a failed login instead
+    of raising a 500 error.
+    """
+    try:
+        return PWD_CTX.verify(plain_password, hashed_password)
+    except (ValueError, TypeError) as exc:
+        # common ValueError: "password cannot be longer than 72 bytes" from bcrypt
+        # or TypeError if plain_password is None — treat as authentication failure
+        return False
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
     to_encode = data.copy()
