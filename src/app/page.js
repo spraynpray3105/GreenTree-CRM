@@ -893,7 +893,7 @@ export default function Dashboard() {
 
               {/* Timeseries: Average shoots vs income (last 30 days) */}
               <div className={THEME.cardDark + " mb-6"}>
-                <h3 className="font-semibold mb-2">Average shoots vs income (last 30 days)</h3>
+                <h3 className="font-semibold mb-2">Shoots & Sales (last 30 days)</h3>
                 {statsLoading ? (
                   <div className="text-sm text-slate-500">Loading stats…</div>
                 ) : statsError ? (
@@ -901,24 +901,71 @@ export default function Dashboard() {
                 ) : (!statsData || statsData.length === 0) ? (
                   <div className="text-sm text-slate-500">No statistics available yet.</div>
                 ) : (
-                  <div className="space-y-2 text-slate-700 dark:text-slate-300">
-                    {(() => {
-                      const parsed = statsData.map(s => ({ date: s.date, shoots: s.shoots_count ?? s.shoots ?? 0, income: s.income_total ?? s.income ?? 0 }));
-                      const maxShoots = Math.max(1, ...parsed.map(p => p.shoots));
-                      return parsed.map(p => (
-                        <div key={p.date} className="flex items-center gap-2 text-xs">
-                          <div className="w-24">{p.date}</div>
-                          <div className="flex-1">
-                            <div className="h-3 bg-slate-100 dark:bg-[#2b2b2b] rounded overflow-hidden">
-                              <div style={{ width: `${(p.shoots / maxShoots) * 100}%` }} className="h-3 bg-blue-500" />
+                  (() => {
+                    // prepare ordered timeseries
+                    const parsed = statsData
+                      .map(s => ({ date: s.date, shoots: Number(s.shoots_count ?? s.shoots ?? 0), income: Number(s.income_total ?? s.income ?? 0) }))
+                      .sort((a,b) => a.date.localeCompare(b.date));
+                    const n = parsed.length;
+                    const viewW = 600, viewH = 120, pad = 20;
+                    const innerW = viewW - pad * 2, innerH = viewH - pad * 2;
+
+                    const buildPoints = (values) => {
+                      const min = Math.min(...values);
+                      const max = Math.max(...values);
+                      const range = max === min ? 1 : (max - min);
+                      return values.map((v, i) => {
+                        const x = pad + (i / Math.max(1, n - 1)) * innerW;
+                        const y = pad + innerH - ((v - min) / range) * innerH;
+                        return `${x},${y}`;
+                      }).join(' ');
+                    };
+
+                    const shootsVals = parsed.map(p => p.shoots);
+                    const incomeVals = parsed.map(p => p.income);
+                    const shootsPoints = buildPoints(shootsVals);
+                    const incomePoints = buildPoints(incomeVals);
+
+                    const buildArea = (pointsStr) => {
+                      // polygon from left-bottom, through points, to right-bottom
+                      const pointsArr = pointsStr.split(' ');
+                      if (pointsArr.length === 0) return '';
+                      const left = `${pad},${pad + innerH}`;
+                      const right = `${pad + innerW},${pad + innerH}`;
+                      return [left, ...pointsArr, right].join(' ');
+                    };
+
+                    const shootsArea = buildArea(shootsPoints);
+                    const incomeArea = buildArea(incomePoints);
+
+                    return (
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <div className="text-xs text-slate-500 mb-2">Shoots (count)</div>
+                            <div className="w-full h-36 bg-slate-50 dark:bg-[#111] rounded p-2">
+                              <svg viewBox={`0 0 ${viewW} ${viewH}`} className="w-full h-full">
+                                <polyline points={shootsPoints} fill="none" stroke="#2563eb" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+                                <polygon points={shootsArea} fill="rgba(37,99,235,0.08)" />
+                              </svg>
                             </div>
                           </div>
-                          <div className="w-20 text-right">${Math.round(p.income)}</div>
+
+                          <div>
+                            <div className="text-xs text-slate-500 mb-2">Sales (income)</div>
+                            <div className="w-full h-36 bg-slate-50 dark:bg-[#111] rounded p-2">
+                              <svg viewBox={`0 0 ${viewW} ${viewH}`} className="w-full h-full">
+                                <polyline points={incomePoints} fill="none" stroke="#16a34a" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+                                <polygon points={incomeArea} fill="rgba(16,163,74,0.06)" />
+                              </svg>
+                            </div>
+                          </div>
                         </div>
-                      ));
-                    })()}
-                    <div className="mt-2 text-xs text-slate-500">Blue bar shows relative number of shoots; the right column is total income per day.</div>
-                  </div>
+
+                        <div className="text-xs text-slate-500">X axis: last {n} days (left = oldest). Values are scaled to chart height.</div>
+                      </div>
+                    );
+                  })()
                 )}
               </div>
 
