@@ -1,6 +1,7 @@
-import os
 from dotenv import load_dotenv
 load_dotenv()  # load .env before reading DATABASE_URL or SECRET_KEY
+
+import os
 
 # SQLAlchemy imports for engine, model and session setup
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
@@ -9,10 +10,8 @@ from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 
 # 1) Read DB URL from env and validate it
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    # Fail fast with a helpful error if env isn't configured
-    raise RuntimeError("DATABASE_URL is not set in environment (.env). Set DATABASE_URL to your Neon/PG URL.")
+# fall back to a local sqlite DB for dev if DATABASE_URL is not set
+DATABASE_URL = os.getenv("DATABASE_URL") or "sqlite:///./dev.db"
 
 # 2) Create engine (pool_pre_ping helps with intermittent connections on cloud DBs)
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
