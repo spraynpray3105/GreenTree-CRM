@@ -805,7 +805,7 @@ export default function Dashboard() {
               onClick={(e) => { e.preventDefault(); setSelectedTab('watcher'); }}
               className={`flex items-center gap-3 ${selectedTab === 'watcher' ? THEME.tabSelected : THEME.tabDefault}`}
             >
-              <Search size={20}/> Watcher
+              <Sun size={20}/> Watcher
             </a>
             
             {/* Dark mode toggle button (in sidebar for convenience) */}
@@ -881,7 +881,7 @@ export default function Dashboard() {
                 onClick={(e) => { e.preventDefault(); setSelectedTab('watcher'); setShowSidebar(false); }}
                 className={`flex items-center gap-3 ${selectedTab === 'watcher' ? THEME.tabMobileSelected : THEME.tabDefault}`}
               >
-                <Search size={18}/> Watcher
+                <Sun size={18}/> Watcher
               </a>
 
               {/* Mobile dark mode toggle */}
@@ -983,6 +983,7 @@ export default function Dashboard() {
                     const viewW = 600, viewH = 120, pad = 20;
                     const innerW = viewW - pad * 2, innerH = viewH - pad * 2;
 
+                    // Build points as arrays to allow smoothing and axis ticks
                     const buildPoints = (values) => {
                       const min = Math.min(...values);
                       const max = Math.max(...values);
@@ -990,26 +991,60 @@ export default function Dashboard() {
                       return values.map((v, i) => {
                         const x = pad + (i / Math.max(1, n - 1)) * innerW;
                         const y = pad + innerH - ((v - min) / range) * innerH;
-                        return `${x},${y}`;
-                      }).join(' ');
+                        return { x, y, v };
+                      });
+                    };
+
+                    // Convert array of points to a smooth SVG path using Catmull-Rom -> Bezier
+                    const pointsToPath = (pts) => {
+                      if (!pts || pts.length === 0) return '';
+                      if (pts.length === 1) return `M ${pts[0].x} ${pts[0].y}`;
+                      const path = [];
+                      const p = (i) => pts[Math.max(0, Math.min(pts.length - 1, i))];
+                      path.push(`M ${pts[0].x} ${pts[0].y}`);
+                      for (let i = 0; i < pts.length - 1; i++) {
+                        const p0 = p(i - 1);
+                        const p1 = p(i);
+                        const p2 = p(i + 1);
+                        const p3 = p(i + 2);
+                        // Catmull-Rom to Bezier conversion
+                        const cp1x = p1.x + (p2.x - p0.x) / 6;
+                        const cp1y = p1.y + (p2.y - p0.y) / 6;
+                        const cp2x = p2.x - (p3.x - p1.x) / 6;
+                        const cp2y = p2.y - (p3.y - p1.y) / 6;
+                        path.push(`C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`);
+                      }
+                      return path.join(' ');
+                    };
+
+                    const pointsToAreaPath = (pts) => {
+                      if (!pts || pts.length === 0) return '';
+                      const linePath = pointsToPath(pts);
+                      // close area to bottom-right and bottom-left
+                      const rightBottom = `${pad + innerW} ${pad + innerH}`;
+                      const leftBottom = `${pad} ${pad + innerH}`;
+                      return `${linePath} L ${rightBottom} L ${leftBottom} Z`;
                     };
 
                     const shootsVals = parsed.map(p => p.shoots);
                     const incomeVals = parsed.map(p => p.income);
-                    const shootsPoints = buildPoints(shootsVals);
-                    const incomePoints = buildPoints(incomeVals);
+                    const shootsPts = buildPoints(shootsVals);
+                    const incomePts = buildPoints(incomeVals);
+                    const shootsPath = pointsToPath(shootsPts);
+                    const incomePath = pointsToPath(incomePts);
+                    const shootsArea = pointsToAreaPath(shootsPts);
+                    const incomeArea = pointsToAreaPath(incomePts);
 
-                    const buildArea = (pointsStr) => {
-                      // polygon from left-bottom, through points, to right-bottom
-                      const pointsArr = pointsStr.split(' ');
-                      if (pointsArr.length === 0) return '';
-                      const left = `${pad},${pad + innerH}`;
-                      const right = `${pad + innerW},${pad + innerH}`;
-                      return [left, ...pointsArr, right].join(' ');
-                    };
+                    // Y-axis ticks (min, mid, max) for shoots and income
+                    const sMin = Math.min(...shootsVals);
+                    const sMax = Math.max(...shootsVals);
+                    const sRange = sMax === sMin ? 1 : (sMax - sMin);
+                    const sTicks = [sMax, Math.round((sMax + sMin) / 2), sMin].map(v => ({ label: v, y: pad + innerH - (((v - sMin) / sRange) * innerH) }));
 
-                    const shootsArea = buildArea(shootsPoints);
-                    const incomeArea = buildArea(incomePoints);
+                    const iMin = Math.min(...incomeVals);
+                    const iMax = Math.max(...incomeVals);
+                    const iRange = iMax === iMin ? 1 : (iMax - iMin);
+                    const iTicks = [iMax, Math.round((iMax + iMin) / 2), iMin].map(v => ({ label: `$${v}`, y: pad + innerH - (((v - iMin) / iRange) * innerH) }));
 
                     return (
                       <div className="space-y-3">
@@ -1017,9 +1052,26 @@ export default function Dashboard() {
                           <div>
                             <div className="text-xs text-slate-500 mb-2">Shoots (count)</div>
                             <div className="w-full h-36 bg-slate-50 dark:bg-[#111] rounded p-2">
+                              <div className="flex items-center justify-between mb-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="w-3 h-3 rounded-full" style={{ background: '#2563eb' }} />
+                                  <div className="text-sm font-medium">Shoots</div>
+                                </div>
+                                <div className="text-xs text-slate-500">Count</div>
+                              </div>
                               <svg viewBox={`0 0 ${viewW} ${viewH}`} className="w-full h-full">
-                                <polyline points={shootsPoints} fill="none" stroke="#2563eb" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
-                                <polygon points={shootsArea} fill="rgba(37,99,235,0.08)" />
+                                {/* grid lines & labels */}
+                                {sTicks.map((t, idx) => (
+                                  <g key={`s-t-${idx}`}>
+                                    <line x1={pad} x2={pad + innerW} y1={t.y} y2={t.y} stroke="rgba(0,0,0,0.06)" />
+                                    <text x={2} y={t.y + 4} fontSize="10" fill="#6b7280">{t.label}</text>
+                                  </g>
+                                ))}
+
+                                {/* area */}
+                                <path d={shootsArea} fill="rgba(37,99,235,0.08)" stroke="none" />
+                                {/* smoothed line */}
+                                <path d={shootsPath} fill="none" stroke="#2563eb" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
                               </svg>
                             </div>
                           </div>
@@ -1027,9 +1079,23 @@ export default function Dashboard() {
                           <div>
                             <div className="text-xs text-slate-500 mb-2">Sales (income)</div>
                             <div className="w-full h-36 bg-slate-50 dark:bg-[#111] rounded p-2">
+                              <div className="flex items-center justify-between mb-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="w-3 h-3 rounded-full" style={{ background: '#16a34a' }} />
+                                  <div className="text-sm font-medium">Sales</div>
+                                </div>
+                                <div className="text-xs text-slate-500">USD</div>
+                              </div>
                               <svg viewBox={`0 0 ${viewW} ${viewH}`} className="w-full h-full">
-                                <polyline points={incomePoints} fill="none" stroke="#16a34a" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
-                                <polygon points={incomeArea} fill="rgba(16,163,74,0.06)" />
+                                {iTicks.map((t, idx) => (
+                                  <g key={`i-t-${idx}`}>
+                                    <line x1={pad} x2={pad + innerW} y1={t.y} y2={t.y} stroke="rgba(0,0,0,0.06)" />
+                                    <text x={2} y={t.y + 4} fontSize="10" fill="#6b7280">{t.label}</text>
+                                  </g>
+                                ))}
+
+                                <path d={incomeArea} fill="rgba(16,163,74,0.06)" stroke="none" />
+                                <path d={incomePath} fill="none" stroke="#16a34a" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
                               </svg>
                             </div>
                           </div>

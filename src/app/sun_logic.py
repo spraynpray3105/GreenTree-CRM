@@ -1,6 +1,26 @@
-from suncalc import get_position, get_times
 from datetime import datetime, timedelta, timezone
 import math
+
+# Prefer using Astral for reliable sun times and Pysolar for azimuth when available.
+try:
+    from astral import Observer
+    from astral.sun import sun as astral_sun
+    ASTRAL_AVAILABLE = True
+except Exception:
+    ASTRAL_AVAILABLE = False
+
+try:
+    from pysolar.solar import get_azimuth as pysolar_get_azimuth
+    PYSOLAR_AVAILABLE = True
+except Exception:
+    PYSOLAR_AVAILABLE = False
+
+# Fallback to suncalc if other libraries aren't present
+try:
+    from suncalc import get_position, get_times
+    SUNCALC_AVAILABLE = True
+except Exception:
+    SUNCALC_AVAILABLE = False
 
 # Optional timezone lookup (best-effort). If timezonefinder is available we'll use
 # it to convert times to the location's local timezone. If not available we fall
@@ -32,7 +52,23 @@ def get_optimal_times(lat, lng, date_str=None):
     else:
         date = datetime.now()
 
-    times = get_times(date, lat, lng) or {}
+    times = {}
+    # Use Astral when available for sunrise/sunset (more reliable)
+    if ASTRAL_AVAILABLE:
+        try:
+            obs = Observer(latitude=float(lat), longitude=float(lng))
+            s = astral_sun(obs, date=date.date() if isinstance(date, datetime) else date, tzinfo=tzinfo)
+            # astral returns keys like 'sunrise' and 'sunset'
+            times = s
+        except Exception:
+            times = {}
+    elif SUNCALC_AVAILABLE:
+        try:
+            times = get_times(date, lat, lng) or {}
+        except Exception:
+            times = {}
+    else:
+        times = {}
 
     # Determine target timezone for formatting. Try timezonefinder first.
     tzinfo = None
@@ -60,10 +96,13 @@ def get_optimal_times(lat, lng, date_str=None):
             return None
         try:
             if dt.tzinfo is None:
-                # many suncalc implementations return naive datetimes in UTC
-                dt = dt.replace(tzinfo=timezone.utc)
-            # convert to target tz
-            return dt.astimezone(tzinfo)
+                # Many libraries return naive datetimes in the local timezone for that location.
+                # Assume naive datetimes are already in the target tz and attach tzinfo accordingly.
+                dt = dt.replace(tzinfo=tzinfo)
+            else:
+                # convert to target tz
+                dt = dt.astimezone(tzinfo)
+            return dt
         except Exception:
             return dt
 
@@ -102,11 +141,29 @@ def get_optimal_times(lat, lng, date_str=None):
     if golden_start and golden_end:
         try:
             midpoint = golden_start + (golden_end - golden_start) / 2
-            pos = get_position(midpoint, lat, lng)
-            az = pos.get('azimuth') if isinstance(pos, dict) else getattr(pos, 'azimuth', None)
+            # Prefer Pysolar for azimuth (gives degrees). Pysolar expects an aware UTC datetime.
+            az = None
+            if PYSOLAR_AVAILABLE:
+                try:
+                    mid_utc = midpoint.astimezone(timezone.utc)
+                    # pysolar_get_azimuth(latitude, longitude, when)
+                    az = pysolar_get_azimuth(float(lat), float(lng), mid_utc)
+                except Exception:
+                    az = None
+            # Fallback to suncalc's position if available
+            if az is None and SUNCALC_AVAILABLE:
+                try:
+                    pos = get_position(midpoint, lat, lng)
+                    az_val = pos.get('azimuth') if isinstance(pos, dict) else getattr(pos, 'azimuth', None)
+                    if az_val is not None:
+                        # suncalc returns radians
+                        az = math.degrees(az_val)
+                except Exception:
+                    az = None
+
             if az is not None:
-                # suncalc returns azimuth in radians; convert to degrees 0..360
-                azimuth_deg = (math.degrees(az) + 360) % 360
+                # normalize to 0..360
+                azimuth_deg = (float(az) + 360) % 360
                 directions = ['North', 'North-East', 'East', 'South-East', 'South', 'South-West', 'West', 'North-West']
                 idx = int((azimuth_deg + 22.5) // 45) % 8
                 front_facing = directions[idx]
