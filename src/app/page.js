@@ -48,6 +48,13 @@ export default function Dashboard() {
   const [customers, setCustomers] = useState([]); // derived customers list
   const [loading, setLoading] = useState(true); // global loading indicator
 
+  // AUTH state: currentUser and login/register forms
+  const [currentUser, setCurrentUser] = useState(null); // populated from /me
+  const [loadingMe, setLoadingMe] = useState(true); // whether we're checking session on load
+  const [loginForm, setLoginForm] = useState({ name: "", password: "" });
+  const [showRegister, setShowRegister] = useState(false); // toggle register modal
+  const [regForm, setRegForm] = useState({ name: "", email: "", password: "" });
+
   // Form state (add shoot)
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
@@ -71,6 +78,29 @@ export default function Dashboard() {
     };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // On mount: check session (/me). credentials: 'include' so httpOnly cookie is sent.
+  useEffect(() => {
+    let mounted = true;
+    const checkMe = async () => {
+      setLoadingMe(true);
+      try {
+        const res = await fetch(`${API_BASE}/me`, { credentials: 'include' });
+        if (res.ok) {
+          const data = await res.json();
+          if (mounted) setCurrentUser(data);
+        } else {
+          if (mounted) setCurrentUser(null);
+        }
+      } catch (err) {
+        if (mounted) setCurrentUser(null);
+      } finally {
+        if (mounted) setLoadingMe(false);
+      }
+    };
+    checkMe();
+    return () => { mounted = false; };
   }, []);
 
   // Fetch properties from API and derive customers + simple stats
@@ -157,7 +187,76 @@ export default function Dashboard() {
     setForm(prev => ({ ...prev, [name]: value }));
   };
 
-  // POST new property to API and update local state
+  // Login handler (sends credentials and relies on httpOnly cookie set by server)
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await fetch(`${API_BASE}/login`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: loginForm.name, password: loginForm.password })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        alert(err?.detail || "Login failed");
+        return;
+      }
+      // refresh session user
+      const me = await fetch(`${API_BASE}/me`, { credentials: 'include' });
+      if (me.ok) {
+        const data = await me.json();
+        setCurrentUser(data);
+      }
+    } catch (err) {
+      console.error("Login error", err);
+      alert("Login error");
+    }
+  };
+
+  // Register handler: creates user then auto-logins so cookie is set
+  const handleRegister = async (e) => {
+    e.preventDefault();
+    try {
+      // create user
+      const res = await fetch(`${API_BASE}/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ name: regForm.name, email: regForm.email, password: regForm.password })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(()=>null);
+        alert(err?.detail || "Register failed");
+        return;
+      }
+
+      // auto-login to receive httpOnly cookie
+      const loginRes = await fetch(`${API_BASE}/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ name: regForm.name, password: regForm.password })
+      });
+      if (!loginRes.ok) {
+        alert("Created user but auto-login failed. Try logging in manually.");
+        setShowRegister(false);
+        return;
+      }
+
+      // fetch /me and set user state
+      const me = await fetch(`${API_BASE}/me`, { credentials: 'include' });
+      if (me.ok) {
+        setCurrentUser(await me.json());
+      }
+      setShowRegister(false);
+    } catch (err) {
+      console.error("Register error", err);
+      alert("Register error");
+    }
+  };
+
+  // POST new property to API and update local state (include credentials so server can validate auth)
   const handleAddProperty = async (e) => {
     e.preventDefault();
     if (!form.address.trim()) return alert("Address is required");
@@ -171,10 +270,14 @@ export default function Dashboard() {
     try {
       const res = await fetch(`${API_BASE}/properties`, {
         method: "POST",
+        credentials: "include", // ensure cookie is sent
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
-      if (!res.ok) throw new Error(`Create failed: ${res.status}`);
+      if (!res.ok) {
+        if (res.status === 401) return alert("You must be logged in to create a property.");
+        throw new Error(`Create failed: ${res.status}`);
+      }
       const created = await res.json();
       const newProp = {
         id: created.id,
@@ -192,40 +295,79 @@ export default function Dashboard() {
     }
   };
 
-  // Customer editing handlers (local only; extend to API if you create customers endpoint)
-  const openEditCustomer = (customer) => {
-    setEditingCustomer({ ...customer });
-    setShowCustomerEditor(true);
-  };
+  // helper to update login/register form fields
+  const updateLoginForm = (e) => setLoginForm(prev => ({ ...prev, [e.target.name]: e.target.value }));
+  const updateRegForm = (e) => setRegForm(prev => ({ ...prev, [e.target.name]: e.target.value }));
 
-  const closeEditCustomer = () => {
-    setEditingCustomer(null);
-    setShowCustomerEditor(false);
-  };
+  // If we are still checking session, show minimal blank/loading
+  if (loadingMe) {
+    return <div className="min-h-screen flex items-center justify-center">Checking session...</div>;
+  }
 
-  const handleCustomerChange = (e) => {
-    const { name, value } = e.target;
-    setEditingCustomer(prev => ({ ...prev, [name]: value }));
-  };
+  // If not authenticated show centered simple login UI with "Create account" option
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-[#1C1C1C]">
+        <div className="w-full max-w-md p-8 bg-white dark:bg-slate-800 rounded-lg shadow-lg">
+          <h1 className="text-3xl font-bold text-center mb-4 text-[rgb(58,99,83)]">Green Tree</h1>
+          <p className="text-sm text-slate-600 dark:text-slate-300 text-center mb-6">Log in once per hour to keep your session active.</p>
 
-  const handleSaveCustomer = (e) => {
-    e.preventDefault();
-    if (!editingCustomer || !editingCustomer.name.trim()) return alert("Customer name is required");
-    setCustomers(prev => prev.map(c => c.id === editingCustomer.id ? {
-      ...c,
-      name: editingCustomer.name.trim(),
-      email: (editingCustomer.email || "").trim(),
-      phone: (editingCustomer.phone || "").trim(),
-      company: (editingCustomer.company || "").trim()
-    } : c));
-    closeEditCustomer();
-  };
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label className="block text-xs text-slate-600 mb-1">Username</label>
+              <input name="name" value={loginForm.name} onChange={updateLoginForm} className="w-full px-3 py-2 border rounded-md" required />
+            </div>
 
-  const handleDeleteCustomer = (customerId) => {
-    if (!confirm("Delete this customer?")) return;
-    setCustomers(prev => prev.filter(c => c.id !== customerId));
-  };
+            <div>
+              <label className="block text-xs text-slate-600 mb-1">Password</label>
+              <input type="password" name="password" value={loginForm.password} onChange={updateLoginForm} className="w-full px-3 py-2 border rounded-md" required />
+            </div>
 
+            <div className="flex items-center justify-between">
+              <button type="submit" className="bg-[#3A6353] text-white px-4 py-2 rounded-md">Sign in</button>
+              <div className="text-xs text-slate-500">Session: 1 hour</div>
+            </div>
+          </form>
+
+          <div className="mt-6 text-center">
+            <button onClick={() => setShowRegister(true)} className="text-sm text-blue-600 underline">Create account</button>
+          </div>
+        </div>
+
+        {/* REGISTER MODAL (simple overlay) */}
+        {showRegister && (
+          <div className="fixed inset-0 flex items-center justify-center z-50" onClick={() => setShowRegister(false)}>
+            <div className="absolute inset-0 bg-black/40" />
+            <form onClick={(e) => e.stopPropagation()} onSubmit={handleRegister} className="relative bg-white dark:bg-slate-800 rounded-lg p-6 w-full max-w-md shadow-lg z-10">
+              <h3 className="text-xl font-bold mb-4">Create account</h3>
+
+              <label className="block mb-2 text-sm">
+                <span className="text-slate-600 dark:text-slate-300">Username</span>
+                <input name="name" value={regForm.name} onChange={updateRegForm} className={`mt-1 block w-full ${THEME.inputDark}`} required />
+              </label>
+
+              <label className="block mb-2 text-sm">
+                <span className="text-slate-600 dark:text-slate-300">Email (optional)</span>
+                <input name="email" value={regForm.email} onChange={updateRegForm} className={`mt-1 block w-full ${THEME.inputDark}`} />
+              </label>
+
+              <label className="block mb-4 text-sm">
+                <span className="text-slate-600 dark:text-slate-300">Password</span>
+                <input type="password" name="password" value={regForm.password} onChange={updateRegForm} className={`mt-1 block w-full ${THEME.inputDark}`} required />
+              </label>
+
+              <div className="flex justify-end gap-3">
+                <button type="button" onClick={() => setShowRegister(false)} className="px-4 py-2 rounded-md bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-slate-100">Cancel</button>
+                <button type="submit" className={`px-4 py-2 rounded-md ${THEME.btnPrimary} ${THEME.btnPrimaryDark} text-white`}>Create</button>
+              </div>
+            </form>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // --- existing app UI (dashboard) renders here when authenticated ---
   return (
     // Wrapper toggles 'dark' class based on state so Tailwind dark: utilities apply
     <div className={`${darkMode ? 'dark' : ''}`}>
