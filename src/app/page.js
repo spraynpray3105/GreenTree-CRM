@@ -23,41 +23,27 @@ export default function Dashboard() {
   }
 
   // THEME: central place for classes and colors used across the page.
-  // Edit these values to change styling app-wide.
-  const THEME = {
-    page: "flex min-h-screen bg-slate-50 dark:bg-[#1C1C1C] text-slate-900 dark:text-slate-100 transition-colors duration-300",
-    headerMobile: "md:hidden fixed top-0 left-0 right-0 z-40 bg-white dark:bg-slate-800 border-b dark:border-[#0b2b20] p-3 flex items-center justify-between",
-    headerTitle: "font-bold text-base md:text-lg text-slate-900 dark:text-slate-100",
-    headerSubtitle: "text-xs text-slate-500 dark:text-slate-400",
-    brandTitle: "text-xl font-bold text-blue-600 dark:text-green-400 flex items-center gap-2",
-    pageTitle: "text-3xl font-bold text-slate-900 dark:text-slate-100",
-    pageSubtitle: "text-slate-500 dark:text-[#B6B6B6] text-sm mt-1",
-    bodyText: "text-slate-500 dark:text-[#B6B6B6] text-sm mt-1",
-    mutedText: "text-slate-500 dark:text-slate-400",
-    sidebarDesktop: "hidden md:block w-64 bg-white dark:bg-[#262626] border-r dark:border-[#0b2b20] p-6 space-y-8",
-    sidebarMobilePanelWrap: "fixed inset-y-0 left-0 z-50 w-64 transform md:hidden transition-transform",
-    sidebarMobilePanel: "h-full bg-white dark:bg-[#262626] border-r dark:border-[#0b2b20] p-6",
-    overlay: "fixed inset-0 bg-black/30 z-40 md:hidden",
-    tabSelected: "px-3 py-2 rounded-md bg- dark:bg-[#3A6353] text-white shadow-sm",
-    tabDefault: "text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-[#3A6353]",
-    tabMobileSelected: "text-blue-600 dark:bg-[#3A6353] font-medium",
-    btnPrimary: "bg-[#3A6353] text-white",
-    btnPrimaryHover: "hover:bg-[#4D846F]",
-    btnPrimaryDark: "dark:bg-[#3A6353] dark:hover:bg-[#4D846F]",
-    btnAccentGreen: "bg-[#3A6353] dark:hover:bg-[#4D846F] text-white",
-    cardDark: "bg-white dark:bg-[#262626] rounded-2xl shadow-sm border dark:border-[#262626] p-6",
-    tableWrapDark: "bg-white dark:bg-[#262626] rounded-2xl shadow-sm border dark:border-[#262626] overflow-hidden",
-    tableHeadDark: "bg-slate-50 dark:bg-[#3D3D3D] text-slate-500 dark:text-slate-400 text-sm",
-    bodyDivideDark: "divide-y dark:divide-[#262626]",
-    cardSmallDark: "bg-white dark:bg-[#262626]",
-    inputDark: "bg-white dark:bg-[#262626] dark:border-[#0b2b20] text-slate-900 dark:text-slate-100 rounded-md px-3 py-2",
-    soldBadge: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
-    pendingBadge: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
-    activeBadge: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
-  };
+  // We'll build the THEME object below after darkMode state so it can return
+  // light-mode variants when requested. See getTheme() further down.
 
   // data & UI state
   const [darkMode, setDarkMode] = useState(false); // toggles the `dark` wrapper class
+  // initialize darkMode from localStorage or system preference on mount
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('theme');
+      if (stored === 'dark') { setDarkMode(true); return; }
+      if (stored === 'light') { setDarkMode(false); return; }
+      // fallback to system preference
+      if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        setDarkMode(true);
+      } else {
+        setDarkMode(false);
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, []);
   const [selectedTab, setSelectedTab] = useState('dashboard'); // which tab/page is active
   const [showSidebar, setShowSidebar] = useState(false); // mobile sidebar open/close
   const [expandedIds, setExpandedIds] = useState([]); // expanded rows/cards
@@ -66,6 +52,55 @@ export default function Dashboard() {
   const [photographers, setPhotographers] = useState([]); // photographers from DB
   const [photographersSource, setPhotographersSource] = useState(null);
   const [photographersError, setPhotographersError] = useState(null);
+  const [photographersRefreshCounter, setPhotographersRefreshCounter] = useState(0);
+
+  // Build a THEME object that returns light or dark variants depending on darkMode.
+  const getTheme = (isDark) => ({
+    // Light-mode values are unchanged. Dark-mode values use the project's
+    // historical custom greys/blacks and avoid visible borders to preserve
+    // the original look you requested.
+    page: isDark ? "flex min-h-screen bg-[#1C1C1C] text-slate-100 transition-colors duration-300" : "flex min-h-screen bg-white text-slate-900 transition-colors duration-300",
+    headerMobile: isDark ? "md:hidden fixed top-0 left-0 right-0 z-40 bg-[#1C1C1C] p-3 flex items-center justify-between" : "md:hidden fixed top-0 left-0 right-0 z-40 bg-white border-b p-3 flex items-center justify-between",
+    headerTitle: isDark ? "font-bold text-base md:text-lg text-slate-100" : "font-bold text-base md:text-lg text-slate-900",
+    headerSubtitle: isDark ? "text-xs text-slate-400" : "text-xs text-slate-500",
+  brandTitle: isDark ? "text-xl font-bold text-green-300 flex items-center gap-2" : "text-xl font-bold text-green-400 flex items-center gap-2",
+  pageTitle: isDark ? "text-3xl font-bold text-slate-100" : "text-3xl font-bold text-slate-900",
+  pageSubtitle: isDark ? "text-slate-300 text-sm mt-1" : "text-slate-600 text-sm mt-1",
+  bodyText: isDark ? "text-slate-300 text-sm mt-1" : "text-slate-700 text-sm mt-1",
+  mutedText: isDark ? "text-slate-400" : "text-slate-600",
+    sidebarDesktop: isDark ? "hidden md:block w-64 bg-[#262626] p-6 space-y-8" : "hidden md:block w-64 bg-white border-r p-6 space-y-8",
+    sidebarMobilePanelWrap: "fixed inset-y-0 left-0 z-50 w-64 transform md:hidden transition-transform",
+    sidebarMobilePanel: isDark ? "h-full bg-[#262626] p-6" : "h-full bg-white border-r p-6",
+    overlay: "fixed inset-0 bg-black/30 z-40 md:hidden",
+  tabSelected: "px-3 py-2 rounded-md bg-green-400 dark:bg-[#3A6353] text-white shadow-sm",
+  tabDefault: isDark ? "text-slate-400 hover:text-[#3A6353]" : "text-slate-500 hover:text-green-400",
+  tabMobileSelected: isDark ? "text-green-300 font-medium" : "text-green-400 font-medium",
+  btnPrimary: "bg-green-400 text-white",
+  btnPrimaryHover: "hover:bg-green-500",
+  btnPrimaryDark: "dark:bg-[#3A6353] dark:hover:bg-[#4D846F]",
+  btnAccentGreen: "bg-green-400 hover:bg-green-500 dark:hover:bg-[#4D846F] text-white",
+    // Card and table styles: use dark greys and remove borders in dark mode
+  cardDark: isDark ? "bg-[#262626] rounded-2xl shadow-sm p-6" : "bg-white rounded-2xl shadow-sm border border-slate-200 p-6",
+  tableWrapDark: isDark ? "bg-[#262626] rounded-2xl shadow-sm overflow-hidden" : "bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden",
+  tableHeadDark: isDark ? "bg-[#262626] text-slate-400 text-sm" : "bg-slate-50 text-slate-600 text-sm",
+    bodyDivideDark: isDark ? "divide-y" : "divide-y",
+    cardSmallDark: isDark ? "bg-[#262626]" : "bg-white",
+  inputDark: isDark ? "bg-[#1C1C1C] text-slate-100 rounded-md px-3 py-2" : "bg-white text-slate-900 rounded-md px-3 py-2 border border-slate-200",
+    soldBadge: isDark ? "bg-green-900/30 text-green-400" : "bg-green-100 text-green-700",
+    pendingBadge: isDark ? "bg-amber-900/30 text-amber-400" : "bg-amber-100 text-amber-700",
+    activeBadge: isDark ? "bg-red-900/30 text-red-400" : "bg-red-100 text-red-700",
+  });
+
+  const THEME = getTheme(darkMode);
+
+  // persist theme choice when toggled
+  const toggleDarkMode = () => {
+    setDarkMode(d => {
+      const next = !d;
+      try { localStorage.setItem('theme', next ? 'dark' : 'light'); } catch(e) {}
+      return next;
+    });
+  };
   const [loading, setLoading] = useState(true); // global loading indicator
   const [serverError, setServerError] = useState(null);
 
@@ -272,10 +307,12 @@ export default function Dashboard() {
     return () => { mounted = false; };
   }, [ENV_API, loadingMe]);
 
-  // Fetch photographers list from API (separate endpoint)
+  // Fetch photographers list from API (separate endpoint). Only fetch when the
+  // photographers tab is visible to avoid unnecessary requests and to keep
+  // the list fresh when the user navigates to the tab.
   useEffect(() => {
-    // wait until session check completes before fetching photographers
     if (loadingMe) return;
+    if (selectedTab !== 'photographers') return;
     let mounted = true;
     const fetchPhotographers = async () => {
       let lastErr = null;
@@ -291,19 +328,16 @@ export default function Dashboard() {
           }
           const data = await res.json();
           if (!mounted) return;
-          // debug: show which API base returned photographers and how many
           try { console.debug('photographers: loaded', url, Array.isArray(data) ? data.length : typeof data); } catch(e) {}
-          // record the successful source for UI visibility
           if (mounted) {
             setPhotographersSource(url);
             setPhotographersError(null);
           }
-          // Merge API photographers with any photographers derived from properties
           const apiList = Array.isArray(data) ? data : [];
+          // Merge API photographers with any photographers derived from properties
           setPhotographers(prev => {
-            // build map by id (when available) or name lowercase
             const map = new Map();
-            prev.forEach(p => {
+            (prev || []).forEach(p => {
               const key = p && p.id ? `id:${p.id}` : `name:${(p.name||'').toLowerCase()}`;
               map.set(key, p);
             });
@@ -311,7 +345,6 @@ export default function Dashboard() {
               const key = p && p.id ? `id:${p.id}` : `name:${(p.name||'').toLowerCase()}`;
               map.set(key, p);
             });
-            // also merge any photographers referenced by current properties state
             try {
               (properties || []).forEach(prop => {
                 const ph = prop && prop.photographer;
@@ -319,10 +352,20 @@ export default function Dashboard() {
                 const key = ph && ph.id ? `id:${ph.id}` : `name:${(ph.name||'').toLowerCase()}`;
                 if (!map.has(key)) map.set(key, ph);
               });
-            } catch (e) {
-              // ignore if properties not ready
+            } catch (e) {}
+            const merged = Array.from(map.values());
+            // if merged is empty but we have properties with embedded photographers, build fallback
+            if (merged.length === 0 && Array.isArray(properties) && properties.length > 0) {
+              const seen = new Map();
+              properties.forEach(p => {
+                const ph = p.photographer;
+                if (!ph) return;
+                const key = ph && ph.id ? `id:${ph.id}` : `name:${(ph.name||'').toLowerCase()}`;
+                if (!seen.has(key)) seen.set(key, ph);
+              });
+              return Array.from(seen.values());
             }
-            return Array.from(map.values());
+            return merged;
           });
           return;
         } catch (err) {
@@ -330,17 +373,29 @@ export default function Dashboard() {
           console.warn(`Failed to fetch photographers from ${url}:`, err);
         }
       }
-      if (lastErr) {
+      if (lastErr && mounted) {
         console.error('Failed to fetch photographers:', lastErr);
-        if (mounted) {
-          setPhotographersSource(null);
-          setPhotographersError(String(lastErr?.message || lastErr));
+        setPhotographersSource(null);
+        setPhotographersError(String(lastErr?.message || lastErr));
+        // fallback: build photographers list from embedded properties (if any)
+        try {
+          const seen = new Map();
+          (properties || []).forEach(p => {
+            const ph = p.photographer;
+            if (!ph) return;
+            const key = ph && ph.id ? `id:${ph.id}` : `name:${(ph.name||'').toLowerCase()}`;
+            if (!seen.has(key)) seen.set(key, ph);
+          });
+          const fallback = Array.from(seen.values());
+          if (fallback.length) setPhotographers(fallback);
+        } catch (e) {
+          // ignore
         }
       }
     };
     fetchPhotographers();
     return () => { mounted = false; };
-  }, [ENV_API]);
+  }, [ENV_API, loadingMe, selectedTab, photographersRefreshCounter]);
 
   // Fetch agents from API (separate endpoint). This powers the Agents tab and the agent editor.
   useEffect(() => {
@@ -490,7 +545,7 @@ export default function Dashboard() {
     }
   };
 
-  const toggleDarkMode = () => setDarkMode(!darkMode);
+ 
 
   const toggleExpand = (id) => {
     setExpandedIds(prev =>
@@ -799,7 +854,7 @@ export default function Dashboard() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-[#1C1C1C]">
         <div className="w-full max-w-md p-8 bg-white dark:bg-slate-800 rounded-lg shadow-lg">
-          <h1 className="text-3xl font-bold text-center mb-4 text-[rgb(58,99,83)]">Green Tree</h1>
+          <h1 className="text-3xl font-bold text-center mb-4 text-green-400">Green Tree</h1>
           <p className="text-sm text-slate-600 dark:text-slate-300 text-center mb-6">Log in once per hour to keep your session active.</p>
 
           <form onSubmit={handleLogin} className="space-y-4">
@@ -814,13 +869,13 @@ export default function Dashboard() {
             </div>
 
             <div className="flex items-center justify-between">
-              <button type="submit" className="bg-[#3A6353] text-white px-4 py-2 rounded-md">Sign in</button>
+              <button type="submit" className="bg-green-400 hover:bg-green-500 text-white px-4 py-2 rounded-md">Sign in</button>
               <div className="text-xs text-slate-500">Session: 1 hour</div>
             </div>
           </form>
 
           <div className="mt-6 text-center">
-            <button onClick={() => setShowRegister(true)} className="text-sm text-blue-600 underline">Create account</button>
+            <button onClick={() => setShowRegister(true)} className="text-sm text-green-400 hover:text-green-400 underline">Create account</button>
           </div>
         </div>
 
@@ -905,7 +960,7 @@ export default function Dashboard() {
         <aside className={THEME.sidebarDesktop}>
           {/* Branding/title at top of sidebar */}
           <h1 className={THEME.brandTitle}>
-            <TreeDeciduous size={24} className="text-[rgb(58,99,83)] mr-1" />
+            <TreeDeciduous size={24} className="text-green-400 mr-1" />
             Green Tree
           </h1>
 
@@ -968,7 +1023,7 @@ export default function Dashboard() {
             {/* Dark mode toggle button (in sidebar for convenience) */}
             <button 
               onClick={toggleDarkMode}
-              className="flex items-center gap-3 w-full text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-green-400 transition"
+              className="flex items-center gap-3 w-full text-slate-500 dark:text-slate-400 hover:text-green-400 dark:hover:text-[#3A6353] transition"
             >
               {darkMode ? <Sun size={20} /> : <Moon size={20} />}
               {darkMode ? 'Light Mode' : 'Dark Mode'}
@@ -985,7 +1040,7 @@ export default function Dashboard() {
             {/* Top row: brand + close button */}
             <div className="flex items-center justify-between mb-6">
               <h2 className={THEME.brandTitle}>
-                <TreeDeciduous size={20} className="text-[rgb(58,99,83)] mr-1" />
+                <TreeDeciduous size={20} className="text-green-400 mr-1" />
                 Green Tree
               </h2>
               {/* Close button hides the panel */}
@@ -1045,7 +1100,7 @@ export default function Dashboard() {
               {/* Mobile dark mode toggle */}
               <button
                 onClick={() => { toggleDarkMode(); setShowSidebar(false); }}
-                className="flex items-center gap-3 w-full text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-green-400 transition mt-4"
+                className="flex items-center gap-3 w-full text-slate-500 dark:text-slate-400 hover:text-green-400 dark:hover:text-[#3A6353] transition mt-4"
               >
                 {darkMode ? <Sun size={18} /> : <Moon size={18} />}
                 {darkMode ? 'Light Mode' : 'Dark Mode'}
@@ -1115,13 +1170,13 @@ export default function Dashboard() {
               {/* Small stats cards row (hidden on mobile). THEME.cardDark controls visual style */}
               <div className="hidden md:grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
                 <div className={THEME.cardDark}>
-                  <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold text-[rgb(58,99,83)]">READY TO BILL</p>
+                  <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold text-green-400">READY TO BILL</p>
                   <p className="text-3xl font-bold mt-2">${fakeStats.avgIncomePerMonth.toLocaleString()}</p>
                   <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Expected to be invoiced / billed.</p>
                 </div>
 
                 <div className={THEME.cardDark}>
-                  <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold text-[rgb(58,99,83)]">TOTAL UNPAID</p>
+                  <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold text-green-400">TOTAL UNPAID</p>
                   <p className="text-3xl font-bold mt-2">${totalUnpaid.toLocaleString()}</p>
                   <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Estimated value of unsold / unpaid listings.</p>
                 </div>
@@ -1483,6 +1538,13 @@ export default function Dashboard() {
                 )}
 
                 <div className="overflow-x-auto">
+                  {(!photographers || photographers.length === 0) && (
+                    <div className="p-4 text-sm text-slate-500">No photographers found. {photographersError ? <span className="text-red-500">Error: {photographersError}</span> : null}
+                      <div className="mt-2">
+                        <button onClick={() => setPhotographersRefreshCounter(c => c + 1)} className={`px-3 py-1 rounded-md ${THEME.btnPrimary} ${THEME.btnPrimaryDark} text-white`}>Retry</button>
+                      </div>
+                    </div>
+                  )}
                   <table className="w-full">
                     <thead className={THEME.tableHeadDark}>
                       <tr>

@@ -19,6 +19,23 @@ export default function PropertyDetailPage() {
   const [photographers, setPhotographers] = useState([]);
   const [agents, setAgents] = useState([]);
   const [matchedAgent, setMatchedAgent] = useState(null);
+  const [darkMode, setDarkMode] = useState(false);
+
+  // initialize darkMode from persisted preference or system preference
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('theme');
+      if (stored === 'dark') { setDarkMode(true); return; }
+      if (stored === 'light') { setDarkMode(false); return; }
+      if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        setDarkMode(true);
+      } else {
+        setDarkMode(false);
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -54,38 +71,63 @@ export default function PropertyDetailPage() {
   }, [id]);
 
   useEffect(()=>{
-    // fetch photographers for the edit form (best-effort, public endpoint)
+    // fetch photographers for the edit form (best-effort). Include auth so the
+    // backend can return only photographers for the current user's company.
     let mounted = true;
     const fetchPhotogs = async () => {
-      try {
-        const base = API_BASE_DEFAULTS[0].replace(/\/$/, "");
-        const res = await fetch(`${base}/photographers`);
-        if (!res.ok) return;
-        const arr = await res.json();
-        if (!mounted) return;
-        setPhotographers(arr || []);
-      } catch (e) {
-        // ignore
+      let lastErr = null;
+      for (const baseRaw of API_BASE_DEFAULTS) {
+        const base = baseRaw.replace(/\/$/, "");
+        try {
+          const token = localStorage.getItem('access_token');
+          const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+          const res = await fetch(`${base}/photographers`, { headers });
+          if (!res.ok) {
+            lastErr = new Error(`${res.status} ${res.statusText}`);
+            continue;
+          }
+          const arr = await res.json();
+          if (!mounted) return;
+          setPhotographers(arr || []);
+          return;
+        } catch (e) {
+          lastErr = e;
+        }
       }
+      // if we got here, the fetch failed for all bases; leave photographers as []
+      if (!mounted) return;
+      setPhotographers([]);
     };
     fetchPhotogs();
     return ()=>{ mounted = false };
   }, []);
 
   useEffect(()=>{
-    // fetch agents for agent contact info (best-effort)
+    // fetch agents for agent contact info (best-effort). Include auth so the
+    // backend returns only agents for the current user's company.
     let mounted = true;
     const fetchAgents = async () => {
-      try {
-        const base = API_BASE_DEFAULTS[0].replace(/\/$/, "");
-        const res = await fetch(`${base}/agents`);
-        if (!res.ok) return;
-        const arr = await res.json();
-        if (!mounted) return;
-        setAgents(arr || []);
-      } catch (e) {
-        // ignore
+      let lastErr = null;
+      for (const baseRaw of API_BASE_DEFAULTS) {
+        const base = baseRaw.replace(/\/$/, "");
+        try {
+          const token = localStorage.getItem('access_token');
+          const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+          const res = await fetch(`${base}/agents`, { headers });
+          if (!res.ok) {
+            lastErr = new Error(`${res.status} ${res.statusText}`);
+            continue;
+          }
+          const arr = await res.json();
+          if (!mounted) return;
+          setAgents(arr || []);
+          return;
+        } catch (e) {
+          lastErr = e;
+        }
       }
+      if (!mounted) return;
+      setAgents([]);
     };
     fetchAgents();
     return ()=>{ mounted = false };
@@ -187,15 +229,22 @@ export default function PropertyDetailPage() {
   if (!property) return <div className="p-6">Property not found.</div>;
   return (
     // Make the page fill the viewport and use flex column so the card can be pushed to the bottom
-    <div className="p-6 min-h-screen flex flex-col">
+    // Wrap with a dark class when darkMode is active so Tailwind dark: classes apply
+    <div className={`${darkMode ? 'dark' : ''} p-6 min-h-screen flex flex-col`}>
       <div className="mb-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2">
           <button onClick={() => router.back()} className="px-3 py-1 bg-slate-200 dark:bg-[#1f2937] dark:text-slate-100 rounded-md">← Back</button>
           {/* Inline primary button classes (THEME not available in this component) */}
-          <button onClick={handleEditToggle} className={`px-3 py-1 rounded-md bg-[#3A6353] text-white dark:bg-[#3A6353] dark:hover:bg-[#4D846F]`}>{isEditing ? 'Close' : 'Edit'}</button>
+          <button onClick={handleEditToggle} className={`px-3 py-1 rounded-md bg-green-400 hover:bg-green-500 text-white dark:bg-[#3A6353] dark:hover:bg-[#4D846F]`}>{isEditing ? 'Close' : 'Edit'}</button>
         </div>
-        <div>
-          <button onClick={() => { navigator.clipboard?.writeText(window.location.href) }} className="px-3 py-1 bg-slate-100 rounded-md">Copy link</button>
+        <div className="flex items-center gap-2">
+          {/* Paid toggle moved to the top-right area, just left of the Copy link button */}
+          {property && !isEditing && (
+            <button disabled={busy} onClick={() => togglePaid(!property.paid)} className={`px-3 py-1 rounded-md ${property.paid ? 'bg-lime-500 text-white hover:bg-lime-600 dark:bg-lime-500 dark:hover:bg-lime-600' : 'bg-green-400 hover:bg-green-500 text-white'}`}>
+              {property.paid ? 'Paid' : 'Mark paid'}
+            </button>
+          )}
+          <button onClick={() => { navigator.clipboard?.writeText(window.location.href) }} className={`px-3 py-1 rounded-md bg-green-400 hover:bg-green-500 text-white dark:bg-[#3A6353] dark:hover:bg-[#4D846F]`}>Copy link</button>
         </div>
       </div>
 
@@ -249,31 +298,41 @@ export default function PropertyDetailPage() {
                 <div className="mt-4">
                   <div className="text-xs text-slate-500">Agent</div>
                   <div className="font-medium">{property.agent || '—'}</div>
-                    {matchedAgent || property.agent_email || property.agent_phone ? (
-                      <div className="mt-2 text-sm space-y-1">
-                        {matchedAgent && matchedAgent.email ? (
-                          <div><a href={`mailto:${matchedAgent.email}`} className="text-blue-600 dark:text-blue-400 underline">{matchedAgent.email}</a></div>
-                        ) : property.agent_email ? (
-                          <div><a href={`mailto:${property.agent_email}`} className="text-blue-600 dark:text-blue-400 underline">{property.agent_email}</a></div>
-                        ) : null}
-                        {matchedAgent && matchedAgent.phone ? (
-                          <div><a href={`tel:${matchedAgent.phone}`} className="text-blue-600 dark:text-blue-400 underline">{matchedAgent.phone}</a></div>
-                        ) : property.agent_phone ? (
-                          <div><a href={`tel:${property.agent_phone}`} className="text-blue-600 dark:text-blue-400 underline">{property.agent_phone}</a></div>
-                        ) : null}
+                  {matchedAgent || property.agent_email || property.agent_phone ? (
+                    <div className="mt-2 text-sm flex gap-6">
+                      <div className="flex flex-col">
+                        <div className="text-xs text-slate-500">Email</div>
+                        <div>
+                            {matchedAgent && matchedAgent.email ? (
+                            <a href={`mailto:${matchedAgent.email}`} className="text-green-400 hover:text-green-400 dark:text-blue-400 dark:hover:text-[#3A6353] underline">{matchedAgent.email}</a>
+                          ) : property.agent_email ? (
+                            <a href={`mailto:${property.agent_email}`} className="text-green-400 hover:text-green-400 dark:text-blue-400 dark:hover:text-[#3A6353] underline">{property.agent_email}</a>
+                          ) : (
+                            <span className="text-slate-500">—</span>
+                          )}
+                        </div>
                       </div>
-                    ) : (
-                      <div className="mt-2 text-sm text-slate-500">No contact information available</div>
-                    )}
+
+                      <div className="flex flex-col">
+                        <div className="text-xs text-slate-500">Phone</div>
+                        <div>
+                          {matchedAgent && matchedAgent.phone ? (
+                            <a href={`tel:${matchedAgent.phone}`} className="text-green-400 hover:text-green-400 dark:text-blue-400 dark:hover:text-[#3A6353] underline">{matchedAgent.phone}</a>
+                          ) : property.agent_phone ? (
+                            <a href={`tel:${property.agent_phone}`} className="text-green-400 hover:text-green-400 dark:text-blue-400 dark:hover:text-[#3A6353] underline">{property.agent_phone}</a>
+                          ) : (
+                            <span className="text-slate-500">—</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-2 text-sm text-slate-500">No contact information available</div>
+                  )}
                 </div>
 
                 <div className="mt-6 flex items-center gap-3">
                   <div className="text-sm">Paid: <strong>{property.paid ? 'Yes' : 'No'}</strong></div>
-                  {!property.paid ? (
-                    <button disabled={busy} onClick={() => togglePaid(true)} className="px-3 py-1 bg-green-600 text-white rounded-md">Mark as paid</button>
-                  ) : (
-                    <button disabled={busy} onClick={() => togglePaid(false)} className="px-3 py-1 bg-yellow-600 text-white rounded-md">Mark as unpaid</button>
-                  )}
                 </div>
               </>
             ) : (
