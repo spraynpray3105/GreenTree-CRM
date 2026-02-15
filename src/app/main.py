@@ -242,7 +242,16 @@ def me(current_user: User = Depends(get_current_user)):
 @app.get("/properties")
 def get_properties(db: Session = Depends(get_db)):
     # public read access (change to protected if desired)
-    return db.query(Property).all()
+    # Some deployments may not have the latest schema (new columns/FKs).
+    # Try the ORM query first; if the DB raises ProgrammingError (missing column),
+    # fall back to a safe textual select that only references guaranteed columns.
+    try:
+        return db.query(Property).all()
+    except ProgrammingError:
+        # rollback the failed transaction and run a safe text query
+        db.rollback()
+        rows = db.execute(text("SELECT id, address, status, price, agent, company FROM properties")).mappings().all()
+        return [dict(r) for r in rows]
 
 @app.post("/properties", status_code=201)
 def create_property(prop_data: PropertyCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):

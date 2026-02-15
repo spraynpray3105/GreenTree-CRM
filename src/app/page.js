@@ -3,8 +3,23 @@ import React, { useEffect, useState } from "react";
 import { Home, DollarSign, Mail, Search, Moon, Sun, BarChart, Menu, X } from 'lucide-react';
 
 export default function Dashboard() {
-  // prefer env, then deployed, then local
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "https://greentree-crm.onrender.com" || "http://localhost:8000";
+  // API base: prefer NEXT_PUBLIC_API_BASE when explicitly set (override),
+  // otherwise try local dev first then the deployed host as fallback.
+  const ENV_API = process.env.NEXT_PUBLIC_API_BASE;
+  const API_BASE_DEFAULTS = [
+    ENV_API, // could be undefined
+    "https://greentree-crm.onrender.com",
+    // local dev backend (some developers run on port 10000)
+    "http://localhost:10000",
+    "http://localhost:8000",
+  ].filter(Boolean);
+  // primary API base used for single-endpoint code paths (legacy code uses API_BASE)
+  const API_BASE = API_BASE_DEFAULTS[0];
+
+  // debug: show which API base the client will attempt (helpful when env changes)
+  if (typeof window !== 'undefined') {
+    console.debug("api bases:", API_BASE_DEFAULTS, "-> primary:", API_BASE);
+  }
 
   // THEME: central place for classes and colors used across the page.
   // Edit these values to change styling app-wide.
@@ -47,6 +62,8 @@ export default function Dashboard() {
   const [properties, setProperties] = useState([]); // properties from DB
   const [customers, setCustomers] = useState([]); // derived customers list
   const [photographers, setPhotographers] = useState([]); // photographers from DB
+  const [photographersSource, setPhotographersSource] = useState(null);
+  const [photographersError, setPhotographersError] = useState(null);
   const [loading, setLoading] = useState(true); // global loading indicator
   const [serverError, setServerError] = useState(null);
 
@@ -95,8 +112,18 @@ export default function Dashboard() {
       setLoadingMe(true);
       try {
         const token = localStorage.getItem("access_token");
-        const headers = token ? { "Authorization": `Bearer ${token}` } : {};
-        const res = await fetch(`${API_BASE}/me`, { headers });
+
+        // If there's no token in localStorage, skip the Authorization check to avoid
+        // triggering a 401 on first load. If you rely on cookie-based sessions, set
+        // the token (or adjust this logic to call /me with credentials: 'include').
+        if (!token) {
+          if (mounted) setCurrentUser(null);
+          return;
+        }
+
+        const headers = { "Authorization": `Bearer ${token}` };
+        // include credentials in case server uses cookies as a fallback
+        const res = await fetch(`${API_BASE}/me`, { headers, credentials: 'include' });
         if (res.ok) {
           const data = await res.json();
           if (mounted) setCurrentUser(data);
@@ -117,22 +144,60 @@ export default function Dashboard() {
   useEffect(() => {
     let mounted = true;
     const fetchProperties = async () => {
-      setLoading(true);
-      setServerError(null);
-      const url = `${API_BASE.replace(/\/$/, "")}/properties`;
-      try {
-        const headers = {};
-        const token = localStorage.getItem("access_token");
-        if (token) headers["Authorization"] = `Bearer ${token}`;
-
-        const res = await fetch(url, { headers, mode: "cors" });
-        if (!res.ok) {
-          const txt = await res.text().catch(()=>null);
-          throw new Error(txt || `${res.status} ${res.statusText}`);
+  setLoading(true);
+  setServerError(null);
+  try {
+      // Try a sequence of candidate bases to tolerate environment differences.
+      const token = localStorage.getItem("access_token");
+      const headers = token ? { "Authorization": `Bearer ${token}` } : {};
+      let data = null;
+      let lastErr = null;
+      for (const base of API_BASE_DEFAULTS) {
+        const url = `${base.replace(/\/$/, "")}/properties`;
+        try {
+          const res = await fetch(url, { headers });
+          if (!res.ok) {
+            const txt = await res.text().catch(()=>null);
+            throw new Error(txt || `${res.status} ${res.statusText}`);
+          }
+          data = await res.json();
+          // success — stop trying further candidates
+          break;
+        } catch (err) {
+          lastErr = err;
+          console.warn(`Failed to fetch properties from ${url}:`, err);
+          // try next candidate
         }
-        const data = await res.json();
+      }
+      if (!data) {
+        throw lastErr || new Error('Failed to fetch properties from any configured API base');
+      }
         if (!mounted) return;
-        setProperties(Array.isArray(data) ? data : []);
+        const propsArr = Array.isArray(data) ? data : [];
+        setProperties(propsArr);
+        // merge any photographers embedded on returned properties into photographers list
+        try {
+          const embedded = [];
+          propsArr.forEach(prop => {
+            if (prop && prop.photographer) embedded.push(prop.photographer);
+          });
+          if (embedded.length) {
+            setPhotographers(prev => {
+              const map = new Map();
+              prev.forEach(p => {
+                const key = p && p.id ? `id:${p.id}` : `name:${(p.name||'').toLowerCase()}`;
+                map.set(key, p);
+              });
+              embedded.forEach(p => {
+                const key = p && p.id ? `id:${p.id}` : `name:${(p.name||'').toLowerCase()}`;
+                if (!map.has(key)) map.set(key, p);
+              });
+              return Array.from(map.values());
+            });
+          }
+        } catch (e) {
+          // ignore merge errors
+        }
 
   // if photographers are present on returned properties, keep them in sync lightly
   // (we also fetch photographers separately below)
@@ -156,7 +221,7 @@ export default function Dashboard() {
         setFakeStats({ avgIncomePerMonth: avgIncome, avgListingDays: avgDays });
       } catch (err) {
         console.error("Failed to load properties:", err);
-        if (mounted) setServerError(String(err?.message || err));
+        if (mounted) setServerError(String(err?.message || err) || 'Failed to fetch properties');
       } finally {
         if (mounted) setLoading(false);
       }
@@ -164,27 +229,77 @@ export default function Dashboard() {
 
     fetchProperties();
     return () => { mounted = false; };
-  }, [API_BASE]);
+  }, [ENV_API, loadingMe]);
 
   // Fetch photographers list from API (separate endpoint)
   useEffect(() => {
+    // wait until session check completes before fetching photographers
+    if (loadingMe) return;
     let mounted = true;
     const fetchPhotographers = async () => {
-      try {
-        const token = localStorage.getItem("access_token");
-        const headers = token ? { "Authorization": `Bearer ${token}` } : {};
-        const res = await fetch(`${API_BASE.replace(/\/$/, "")}/photographers`, { headers });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!mounted) return;
-        setPhotographers(Array.isArray(data) ? data : []);
-      } catch (err) {
-        console.error('Failed to fetch photographers', err);
+      let lastErr = null;
+      for (const base of API_BASE_DEFAULTS) {
+        const url = `${base.replace(/\/$/, "")}/photographers`;
+        try {
+          const token = localStorage.getItem("access_token");
+          const headers = token ? { "Authorization": `Bearer ${token}` } : {};
+          const res = await fetch(url, { headers });
+          if (!res.ok) {
+            lastErr = new Error(`${res.status} ${res.statusText}`);
+            continue;
+          }
+          const data = await res.json();
+          if (!mounted) return;
+          // debug: show which API base returned photographers and how many
+          try { console.debug('photographers: loaded', url, Array.isArray(data) ? data.length : typeof data); } catch(e) {}
+          // record the successful source for UI visibility
+          if (mounted) {
+            setPhotographersSource(url);
+            setPhotographersError(null);
+          }
+          // Merge API photographers with any photographers derived from properties
+          const apiList = Array.isArray(data) ? data : [];
+          setPhotographers(prev => {
+            // build map by id (when available) or name lowercase
+            const map = new Map();
+            prev.forEach(p => {
+              const key = p && p.id ? `id:${p.id}` : `name:${(p.name||'').toLowerCase()}`;
+              map.set(key, p);
+            });
+            apiList.forEach(p => {
+              const key = p && p.id ? `id:${p.id}` : `name:${(p.name||'').toLowerCase()}`;
+              map.set(key, p);
+            });
+            // also merge any photographers referenced by current properties state
+            try {
+              (properties || []).forEach(prop => {
+                const ph = prop && prop.photographer;
+                if (!ph) return;
+                const key = ph && ph.id ? `id:${ph.id}` : `name:${(ph.name||'').toLowerCase()}`;
+                if (!map.has(key)) map.set(key, ph);
+              });
+            } catch (e) {
+              // ignore if properties not ready
+            }
+            return Array.from(map.values());
+          });
+          return;
+        } catch (err) {
+          lastErr = err;
+          console.warn(`Failed to fetch photographers from ${url}:`, err);
+        }
+      }
+      if (lastErr) {
+        console.error('Failed to fetch photographers:', lastErr);
+        if (mounted) {
+          setPhotographersSource(null);
+          setPhotographersError(String(lastErr?.message || lastErr));
+        }
       }
     };
     fetchPhotographers();
     return () => { mounted = false; };
-  }, [API_BASE]);
+  }, [ENV_API]);
 
   // helper to rebuild customers when properties change
   const rebuildCustomersFromProperties = (props) => {
@@ -269,6 +384,43 @@ export default function Dashboard() {
     }
   };
 
+  // Customer editor helpers
+  const openEditCustomer = (c) => {
+    // create a shallow copy so editing doesn't mutate list until saved
+    setEditingCustomer({ ...c });
+    setShowCustomerEditor(true);
+  };
+
+  const closeEditCustomer = () => {
+    setEditingCustomer(null);
+    setShowCustomerEditor(false);
+  };
+
+  const handleCustomerChange = (e) => {
+    const { name, value } = e.target;
+    setEditingCustomer(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleSaveCustomer = (e) => {
+    e.preventDefault();
+    if (!editingCustomer || !editingCustomer.name || !editingCustomer.name.trim()) return alert('Name is required');
+    // Update customers list locally
+    setCustomers(prev => prev.map(c => (c.id === editingCustomer.id ? { ...c, ...editingCustomer } : c)));
+    // Also update properties that referenced this customer by name (best-effort)
+    setProperties(prev => prev.map(p => (p.agent && p.agent.toLowerCase() === editingCustomer.name.toLowerCase() ? { ...p, agent: editingCustomer.name } : p)));
+    closeEditCustomer();
+  };
+
+  const handleDeleteCustomer = (id) => {
+    if (!confirm('Delete this customer? This will clear the agent field on any matching properties.')) return;
+    const c = customers.find(x => x.id === id);
+    if (c) {
+      // clear agent references from properties
+      setProperties(prev => prev.map(p => (p.agent && p.agent.toLowerCase() === (c.name || '').toLowerCase() ? { ...p, agent: '' } : p)));
+      setCustomers(prev => prev.filter(x => x.id !== id));
+    }
+  };
+
   // Login handler: receive token in response, store in localStorage and fetch /me with Authorization header
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -276,7 +428,8 @@ export default function Dashboard() {
       const res = await fetch(`${API_BASE}/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: loginForm.name, password: loginForm.password })
+        body: JSON.stringify({ name: loginForm.name, password: loginForm.password }),
+        credentials: 'include'
       });
       if (!res.ok) {
         const err = await res.json().catch(() => null);
@@ -285,9 +438,12 @@ export default function Dashboard() {
       }
       const body = await res.json();
       if (body.access_token) {
+        // persist token and immediately verify with /me
+        console.debug('login: received token', body.access_token && body.access_token.slice(0,8) + '...');
         localStorage.setItem("access_token", body.access_token);
-        const me = await fetch(`${API_BASE}/me`, { headers: { "Authorization": `Bearer ${body.access_token}` }});
+        const me = await fetch(`${API_BASE}/me`, { headers: { "Authorization": `Bearer ${body.access_token}` }, credentials: 'include' });
         if (me.ok) setCurrentUser(await me.json());
+        else console.warn('GET /me after login returned', me.status);
       } else {
         alert("Login succeeded but no token returned");
       }
@@ -885,7 +1041,19 @@ export default function Dashboard() {
             <>
               <div className={THEME.cardDark + " mb-6"}>
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-semibold">Photographers</h3>
+                  <div>
+                    <h3 className="font-semibold">Photographers</h3>
+                    {/* status line: shows where photographers were loaded from or errors */}
+                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                      {photographersError ? (
+                        <span className="text-red-500">Failed to load photographers: {photographersError}</span>
+                      ) : photographersSource ? (
+                        <span>Loaded {photographers.length} from {photographersSource}</span>
+                      ) : (
+                        <span>Not loaded yet</span>
+                      )}
+                    </div>
+                  </div>
                   <div className="flex items-center gap-2">
                     <button onClick={() => setShowPhotogForm(!showPhotogForm)} className={`px-3 py-1 rounded-md ${THEME.btnPrimary} ${THEME.btnPrimaryDark} text-white`}>{showPhotogForm ? 'Close' : '+ Add Photographer'}</button>
                   </div>
