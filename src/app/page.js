@@ -602,7 +602,7 @@ export default function Dashboard() {
             <title>${title}</title>
             <meta charset="utf-8" />
             <style>
-              body { font-family: -apple-system, system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; color: #111827; padding: 24px; }
+              body { font-family: 'Roboto', -apple-system, system-ui, 'Segoe UI', Arial, 'Helvetica Neue'; color: #111827; padding: 24px; }
               h1 { font-size: 20px; margin-bottom: 6px }
               .muted { color: #6b7280; font-size: 12px }
               .grid { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 18px }

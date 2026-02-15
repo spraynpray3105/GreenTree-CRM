@@ -171,17 +171,79 @@ export default function PropertyDetailPage() {
           const token = localStorage.getItem('access_token');
           const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
           const res = await fetch(url, { headers, credentials: 'include' });
+          // Handle non-OK responses with helpful behavior for rate limits and auth
           if (!res.ok) {
             // surface 401 specifically so UI can show helpful hint
             if (res.status === 401) {
               lastErr = new Error('Unauthorized - please log in to request AI summaries');
-            } else {
-              lastErr = new Error(`${res.status} ${res.statusText}`);
+              continue;
             }
+
+            // Rate limit: try to read Retry-After header and any JSON body with a fallback
+            if (res.status === 429) {
+              let retryAfter = res.headers.get('Retry-After');
+              let body = null;
+              try {
+                body = await res.json();
+              } catch (e) {
+                body = null;
+              }
+              // If the backend provided a low-confidence fallback, show it immediately
+              if (body && body.fallback) {
+                if (!mounted) return;
+                setAiSummary(body.fallback);
+                setAiLoading(false);
+                setAiError(body.error || `Rate limit exceeded. Retry after ${body.retry_after_seconds || retryAfter || 'a while'}.`);
+                return;
+              }
+              // otherwise surface a Retry-After style message and stop trying other bases
+              if (!mounted) return;
+              setAiLoading(false);
+              setAiError(`Rate limit exceeded. Retry after ${body?.retry_after_seconds || retryAfter || 'a short while'}.`);
+              return;
+            }
+
+            lastErr = new Error(`${res.status} ${res.statusText}`);
             continue;
           }
-          const data = await res.json();
+
+          const data = await res.json().catch(()=>null);
           if (!mounted) return;
+
+          // If the backend returned a structured error, log details for debugging
+          if (data && data.error) {
+            try {
+              console.error('AI backend error response:', data);
+            } catch (e) {}
+            // If a low-confidence fallback was provided, show it so UI remains useful
+            if (data.fallback) {
+              setAiSummary(data.fallback);
+              setAiLoading(false);
+              setAiError(JSON.stringify(data));
+              return;
+            }
+            setAiLoading(false);
+            setAiError(JSON.stringify(data));
+            return;
+          }
+
+          // If the AI helper returned a structured quota_exceeded marker, handle it like 429
+          if (data && data.quota_exceeded) {
+            if (data.fallback) {
+              if (!mounted) return;
+              setAiSummary(data.fallback);
+              setAiLoading(false);
+              setAiError(data.error || `Rate limit exceeded. Retry after ${data.retry_after_seconds || 'a short while'}.`);
+              try { console.error('AI quota_exceeded:', data); } catch (e) {}
+              return;
+            }
+            if (!mounted) return;
+            setAiLoading(false);
+            setAiError(data.error || `Rate limit exceeded. Retry after ${data.retry_after_seconds || 'a short while'}.`);
+            try { console.error('AI quota_exceeded:', data); } catch (e) {}
+            return;
+          }
+
           setAiSummary(data);
           setAiLoading(false);
           return;
@@ -354,7 +416,7 @@ export default function PropertyDetailPage() {
                         const stored = (property.status || '').toString().toLowerCase();
                         if (aiIndicator && stored && aiIndicator !== stored) {
                           return (
-                            <div className="mt-2 text-xs font-semibold text-amber-700">AI indicates "{(aiSummary.indicator || aiSummary.status)}" which differs from stored status "{property.status}"</div>
+                            <div className="mt-2 text-xs font-semibold text-green-600">AI indicates "{(aiSummary.indicator || aiSummary.status)}" which differs from stored status "{property.status}"</div>
                           );
                         }
                         return null;

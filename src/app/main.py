@@ -10,7 +10,23 @@ import os
 from database import SessionLocal, Property, User, Photographer, Statistic, Agent  # ensure Photographer + Statistic + Agent models are available
 from sun_logic import get_optimal_times
 from geopy.geocoders import Nominatim
-from ai_services import get_property_update
+from ai_services import get_property_update, AVAILABLE_MODELS, GEMINI_MODEL
+import asyncio
+import time
+
+# Simple in-memory cache for AI summaries to avoid repeated slow calls
+AI_CACHE: dict = {}
+AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL_SECONDS", "21600"))  # default 6 hours
+
+async def _refresh_ai_cache(address: str):
+    """Background task that refreshes the AI cache for an address."""
+    try:
+        res = await asyncio.to_thread(get_property_update, address)
+        if isinstance(res, dict) and not res.get('error'):
+            AI_CACHE[address.lower().strip()] = (res, time.time())
+    except Exception:
+        # ignore background refresh failures
+        pass
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -283,22 +299,76 @@ def me(current_user: User = Depends(get_current_user)):
 # AI helpers / endpoints
 # ----------------------
 @app.get("/ai/summary")
-def ai_summary(address: str, current_user: User = Depends(get_current_user)):
+async def ai_summary(address: str, current_user: User = Depends(get_current_user)):
     """Return a short AI-generated summary for a single property address.
     Uses `ai_services.get_property_update` and returns a compact summary and an indicator.
     """
-    res = get_property_update(address)
-    # If helper returned an error dict, surface it as 502 with helpful message
+    key = address.lower().strip()
+
+    # Return cached result if fresh
+    cached = AI_CACHE.get(key)
+    if cached:
+        res_obj, ts = cached
+        if (time.time() - ts) < AI_CACHE_TTL:
+            # normalize and return quickly
+            status = (res_obj.get('status') or '').title() if res_obj.get('status') else 'Unknown'
+            sold_date = res_obj.get('sold_date')
+            confidence = res_obj.get('confidence')
+            summary = res_obj.get('summary') if isinstance(res_obj.get('summary'), str) else None
+            short = status
+            if sold_date:
+                short += f" on {sold_date}"
+            if confidence is not None:
+                try:
+                    short += f" (confidence {float(confidence):.2f})"
+                except Exception:
+                    pass
+            if summary:
+                short += f": {summary}"
+            indicator = None
+            if status.lower() == 'sold':
+                indicator = 'SOLD'
+            elif status.lower() == 'active':
+                indicator = 'ACTIVE'
+            elif status.lower() == 'pending':
+                indicator = 'PENDING'
+            return { 'address': address, 'status': status, 'sold_date': sold_date, 'confidence': confidence, 'summary': short, 'indicator': indicator }
+
+    # Not cached or expired: attempt to fetch but don't block too long
+    try:
+        # Try calling the blocking helper in a thread with a short timeout
+        res = await asyncio.wait_for(asyncio.to_thread(get_property_update, address), timeout=6.0)
+    except asyncio.TimeoutError:
+        # schedule a background refresh and return a low-confidence placeholder quickly
+        asyncio.create_task(_refresh_ai_cache(address))
+        return { 'address': address, 'status': 'Unknown', 'sold_date': None, 'confidence': 0.0, 'summary': 'AI summary pending (request timed out); refresh shortly', 'indicator': None }
+    except Exception as e:
+        # schedule background refresh and return an error-like placeholder
+        asyncio.create_task(_refresh_ai_cache(address))
+        raise HTTPException(status_code=502, detail=f"AI service error: {str(e)}")
+
+    # If the helper indicates quota/rate-limit exhaustion, surface 429 with Retry-After
+    if isinstance(res, dict) and res.get('quota_exceeded'):
+        # schedule a background refresh attempt for later
+        asyncio.create_task(_refresh_ai_cache(address))
+        retry = res.get('retry_after_seconds') or 60
+        raise HTTPException(status_code=429, detail=res.get('error') or 'Quota exceeded', headers={"Retry-After": str(int(retry))})
+
     if isinstance(res, dict) and res.get('error'):
+        # If helper returned an error dict, schedule a refresh and surface helpful message
+        asyncio.create_task(_refresh_ai_cache(address))
         raise HTTPException(status_code=502, detail=f"AI service error: {res.get('error')}")
 
-    # Normalize response and build short summary
     if not isinstance(res, dict):
         raise HTTPException(status_code=500, detail="AI returned unexpected response")
+
+    # store in cache
+    AI_CACHE[key] = (res, time.time())
 
     status = (res.get('status') or '').title() if res.get('status') else 'Unknown'
     sold_date = res.get('sold_date')
     confidence = res.get('confidence')
+    summary = res.get('summary') if isinstance(res.get('summary'), str) else None
 
     short = status
     if sold_date:
@@ -308,6 +378,8 @@ def ai_summary(address: str, current_user: User = Depends(get_current_user)):
             short += f" (confidence {float(confidence):.2f})"
         except Exception:
             pass
+    if summary:
+        short += f": {summary}"
 
     indicator = None
     if status.lower() == 'sold':
@@ -321,7 +393,7 @@ def ai_summary(address: str, current_user: User = Depends(get_current_user)):
 
 
 @app.post("/ai/sync")
-def ai_sync_properties(payload: dict | None = None, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def ai_sync_properties(payload: dict | None = None, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Sync AI summaries for properties belonging to the current user's company.
     Optional JSON body: { "property_ids": [1,2,3] } to limit to specific properties.
     Returns a mapping of property_id -> ai summary object.
@@ -347,19 +419,32 @@ def ai_sync_properties(payload: dict | None = None, current_user: User = Depends
         props = [ SimpleNamespace(**r) for r in rows ]
 
     results = {}
-    for p in props:
+
+    # Limit concurrency to avoid exhausting provider connections
+    semaphore = asyncio.Semaphore(int(os.getenv('AI_SYNC_CONCURRENCY', '6')))
+
+    async def fetch_and_format(p):
         addr = getattr(p, 'address', None)
         if not addr:
-            continue
-        try:
-            aires = get_property_update(addr)
-        except Exception as e:
-            results[getattr(p, 'id', addr)] = { 'error': str(e) }
-            continue
+            return (getattr(p, 'id', addr), { 'error': 'No address' })
+        key = addr.lower().strip()
 
-        status = (aires.get('status') or '').title() if aires and isinstance(aires, dict) else 'Unknown'
-        sold_date = aires.get('sold_date') if isinstance(aires, dict) else None
-        confidence = aires.get('confidence') if isinstance(aires, dict) else None
+        async with semaphore:
+            try:
+                # Prefer cached value if recent
+                cached = AI_CACHE.get(key)
+                if cached and (time.time() - cached[1]) < AI_CACHE_TTL:
+                    res_obj = cached[0]
+                else:
+                    res_obj = await asyncio.to_thread(get_property_update, addr)
+                    if isinstance(res_obj, dict) and not res_obj.get('error'):
+                        AI_CACHE[key] = (res_obj, time.time())
+            except Exception as e:
+                return (getattr(p, 'id', addr), { 'error': str(e) })
+
+        status = (res_obj.get('status') or '').title() if res_obj and isinstance(res_obj, dict) else 'Unknown'
+        sold_date = res_obj.get('sold_date') if isinstance(res_obj, dict) else None
+        confidence = res_obj.get('confidence') if isinstance(res_obj, dict) else None
         short = status
         if sold_date:
             short += f" on {sold_date}"
@@ -377,16 +462,29 @@ def ai_sync_properties(payload: dict | None = None, current_user: User = Depends
         elif status.lower() == 'pending':
             indicator = 'PENDING'
 
-        results[getattr(p, 'id', addr)] = {
+        return (getattr(p, 'id', addr), {
             'address': addr,
             'status': status,
             'sold_date': sold_date,
             'confidence': confidence,
             'summary': short,
             'indicator': indicator
-        }
+        })
+
+    tasks = [ fetch_and_format(p) for p in props ]
+    done = await asyncio.gather(*tasks)
+    for k, v in done:
+        results[k] = v
 
     return results
+
+
+@app.get("/ai/models")
+def ai_models(current_user: User = Depends(get_current_user)):
+    """Return the list of detected available models and the currently configured model.
+    This helps pick an alternative when you hit quota or Model NotFound errors.
+    """
+    return {"available_models": AVAILABLE_MODELS or [], "configured_model": GEMINI_MODEL}
 
 
 # ----- Statistics models & endpoints -----

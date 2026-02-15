@@ -1,15 +1,18 @@
 import os
 import json
+import re
 import logging
-from google.api_core.exceptions import NotFound
+from google.api_core.exceptions import NotFound, ResourceExhausted
 
 logger = logging.getLogger('ai_services')
 logger.setLevel(logging.DEBUG)
 
 # Read config early
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest")
 AVAILABLE_MODELS = None
+# runtime-selected model (may change if we auto-failover)
+CURRENT_MODEL = GEMINI_MODEL
 
 # Prefer the new genai wrapper usage: `from google import genai; client = genai.Client()`
 GENAI_NEW_PKG = None
@@ -207,91 +210,157 @@ def get_property_update(address: str):
     prompt = f"""
 Find the current real estate status for: {address}.
 Check if it is 'Active', 'Pending', or 'Sold'.
-If sold, provide the date in YYYY-MM-DD.
+If sold, provide the date in YYYY-MM-DD. Provide
+a brief description of the property.
 Return ONLY a JSON object, for example:
-{{"status": "Sold", "sold_date": "2024-05-20", "confidence": 0.9}}
+{{"status": "Sold", "sold_date": "2024-05-20", "confidence": 0.9, "summary": "Beautiful 3-bedroom house with a large backyard."}}
 """
+    # Build candidate model list: prefer CURRENT_MODEL then fall back to AVAILABLE_MODELS
+    candidates = []
     try:
-        # Flexible invocation: support genai.Client(), google.ai service, and the older google.generativeai
+        if CURRENT_MODEL:
+            candidates.append(CURRENT_MODEL)
+        if AVAILABLE_MODELS and isinstance(AVAILABLE_MODELS, (list, tuple)):
+            for m in AVAILABLE_MODELS:
+                if m and m not in candidates:
+                    candidates.append(m)
+    except Exception:
+        candidates = [CURRENT_MODEL]
+
+    last_exc = None
+    # Try each candidate model until one succeeds
+    for candidate in candidates:
         text = None
-        # New genai.Client() path
-        if model == 'GENAI_NEW':
-            last_exc = None
-            try:
-                # Preferred usage per docs: client.models.generate_content(model=..., contents=...)
-                if hasattr(GENAI_NEW_CLIENT, 'models') and hasattr(GENAI_NEW_CLIENT.models, 'generate_content'):
+        try:
+            # New genai.Client() path
+            if model == 'GENAI_NEW':
+                try:
+                    # run search tool if available (best-effort)
+                    search_text = None
                     try:
-                        resp = GENAI_NEW_CLIENT.models.generate_content(model=GEMINI_MODEL, contents=prompt)
-                        # try to extract textual output
+                        if hasattr(GENAI_NEW_CLIENT, 'tools') and hasattr(GENAI_NEW_CLIENT.tools, 'run'):
+                            try:
+                                tool_resp = GENAI_NEW_CLIENT.tools.run(name='google_search_retrieval', arguments={'query': f"{address} real estate status"})
+                                search_text = getattr(tool_resp, 'output', None) or getattr(tool_resp, 'text', None) or str(tool_resp)
+                            except Exception:
+                                logger.debug('google_search_retrieval tool failed for candidate %s; continuing without search', candidate)
+                    except Exception:
+                        search_text = None
+
+                    use_prompt = prompt
+                    if search_text:
+                        use_prompt = f"Search results:\n{search_text}\n\n{prompt}"
+
+                    # Preferred call shape
+                    try:
+                        resp = GENAI_NEW_CLIENT.models.generate_content(model=candidate, contents=use_prompt)
                         text = getattr(resp, 'output', None) or getattr(resp, 'text', None) or str(resp)
                     except Exception:
                         # try alternate contents shape
+                        resp = GENAI_NEW_CLIENT.models.generate_content(model=candidate, contents=[{"type": "input_text", "text": use_prompt}])
+                        text = getattr(resp, 'output', None) or getattr(resp, 'text', None) or str(resp)
+                except Exception as e:
+                    last_exc = e
+
+            # google.ai GenerativeServiceClient path
+            elif model == 'GENAI_SERVICE':
+                try:
+                    if hasattr(GENAI_SERVICE, 'generate_text'):
                         try:
-                            resp = GENAI_NEW_CLIENT.models.generate_content(model=GEMINI_MODEL, contents=[{"type": "input_text", "text": prompt}])
-                            text = getattr(resp, 'output', None) or getattr(resp, 'text', None) or str(resp)
-                        except Exception as e:
-                            last_exc = e
-                else:
-                    last_exc = RuntimeError('genai.Client() does not expose models.generate_content')
-            except Exception as e:
-                last_exc = e
-
-            if not text:
-                raise RuntimeError(f'Could not call generate_content on genai.Client(); last error: {last_exc}')
-
-        # google.ai GenerativeServiceClient path
-        elif model == 'GENAI_SERVICE':
-            last_exc = None
-            # try several plausible method names on the service client
-            try:
-                # preferred: generate_text
-                if hasattr(GENAI_SERVICE, 'generate_text'):
-                    try:
-                        resp = GENAI_SERVICE.generate_text(request={"model": GEMINI_MODEL, "prompt": {"text": prompt}})
-                        text = str(resp)
-                    except Exception:
-                        resp = GENAI_SERVICE.generate_text(model=GEMINI_MODEL, prompt=prompt)
-                        text = str(resp)
-            except Exception as e:
-                last_exc = e
-
-            if not text:
-                for fn in ('generate', 'generate_text', 'generate_message', 'chat'):
-                    if hasattr(GENAI_SERVICE, fn):
-                        try:
-                            fnc = getattr(GENAI_SERVICE, fn)
-                            try:
-                                resp = fnc(model=GEMINI_MODEL, prompt=prompt)
-                            except TypeError:
-                                resp = fnc(request={"model": GEMINI_MODEL, "input": prompt})
+                            resp = GENAI_SERVICE.generate_text(request={"model": candidate, "prompt": {"text": prompt}})
                             text = str(resp)
-                            break
-                        except Exception as e:
-                            last_exc = e
+                        except Exception:
+                            resp = GENAI_SERVICE.generate_text(model=candidate, prompt=prompt)
+                            text = str(resp)
+                    if not text:
+                        for fn in ('generate', 'generate_text', 'generate_message', 'chat'):
+                            if hasattr(GENAI_SERVICE, fn):
+                                fnc = getattr(GENAI_SERVICE, fn)
+                                try:
+                                    resp = fnc(model=candidate, prompt=prompt)
+                                except TypeError:
+                                    resp = fnc(request={"model": candidate, "input": prompt})
+                                text = str(resp)
+                                break
+                except Exception as e:
+                    last_exc = e
+
+            else:
+                # Old client path: create a temporary GenerativeModel for this candidate
+                try:
+                    if OLD_GENAI_PKG is not None:
+                        try:
+                            temp_model = OLD_GENAI_PKG.GenerativeModel(candidate)
+                            response = temp_model.generate_content(prompt)
+                        except Exception:
+                            # fallback to previously created OLD_MODEL if available
+                            response = (OLD_MODEL.generate_content(prompt) if OLD_MODEL is not None else None)
+                    else:
+                        response = None
+                    if response is None:
+                        raise RuntimeError('No usable old client model available')
+                    try:
+                        text = getattr(response, 'text', None) or str(response)
+                    except Exception:
+                        text = str(response)
+                except Exception as e:
+                    last_exc = e
 
             if not text:
-                raise RuntimeError(f'Could not call generate on GenerativeServiceClient; last error: {last_exc}')
+                # If we have a last_exc that is notable, raise it to trigger specific handling
+                if last_exc:
+                    raise last_exc
+                raise RuntimeError('No text returned from model')
 
-        else:
-            # Old client path (google.generativeai.GenerativeModel instance stored in model)
-            response = model.generate_content(prompt)
-            # response may not expose .text in some client versions; coerce to string safely
+            logger.debug('AI raw response for %s using model %s: %s', address, candidate, (text or '')[:2000])
+            parsed = _try_parse_json_from_text(text)
+            if not isinstance(parsed, dict):
+                raise ValueError('Parsed response is not a JSON object')
+
+            # Success: update runtime current model and return parsed result
             try:
-                text = getattr(response, 'text', None) or str(response)
+                CURRENT_MODEL = candidate  # update runtime selection
             except Exception:
-                text = str(response)
+                pass
+            return parsed
 
-        logger.debug('AI raw response for %s: %s', address, (text or '')[:2000])
+        except ResourceExhausted as e:
+            # Log and try next candidate model (different model may have quota)
+            logger.warning('ResourceExhausted for model %s: %s', candidate, str(e))
+            last_exc = e
+            # continue to next candidate
+            continue
+        except NotFound as e:
+            logger.warning('Model not found for candidate %s: %s', candidate, str(e))
+            last_exc = e
+            continue
+        except Exception as e:
+            logger.exception('Attempt with model %s failed for %s', candidate, address)
+            last_exc = e
+            continue
 
-        parsed = _try_parse_json_from_text(text)
-        # sanity-check keys
-        if not isinstance(parsed, dict):
-            raise ValueError('Parsed response is not a JSON object')
-        return parsed
-    except NotFound as e:
-        # Specific helpful message when the configured model is not available
-        logger.exception('Model not found for address %s: %s', address, str(e))
-        # return an error dict and also provide a low-confidence local heuristic fallback
+    # If we get here, no candidate succeeded
+    logger.error('All model candidates failed for %s; tried: %s', address, candidates)
+    # If the last exception was ResourceExhausted, return structured quota info
+    if isinstance(last_exc, ResourceExhausted):
+        s = str(last_exc)
+        retry_seconds = None
+        try:
+            m = re.search(r'retry_delay\s*\{[^}]*seconds:\s*([0-9.]+)', s)
+            if m:
+                retry_seconds = int(float(m.group(1)))
+        except Exception:
+            retry_seconds = None
+        fallback = {
+            'status': 'Unknown',
+            'sold_date': None,
+            'confidence': 0.0,
+            'summary': f'Quota exceeded for LLM; local heuristic suggests unknown status for {address}.',
+            '_local_fallback': True
+        }
+        return {"error": f"Quota exceeded: {str(last_exc)}", "quota_exceeded": True, "retry_after_seconds": retry_seconds, "fallback": fallback, "attempted_models": candidates}
+
+    if isinstance(last_exc, NotFound):
         fallback = {
             'status': 'Unknown',
             'sold_date': None,
@@ -299,8 +368,7 @@ Return ONLY a JSON object, for example:
             'summary': f'Could not contact configured LLM model. Local heuristic suggests unknown status for {address}.',
             '_local_fallback': True
         }
-        return {"error": f"Model not found: {str(e)}", "fallback": fallback}
-    except Exception as e:
-        logger.exception('Failed to get property update for %s', address)
-        # include a short snippet of the model output in logs but avoid returning secrets
-        return {"error": str(e)}
+        return {"error": f"Model not found: {str(last_exc)}", "fallback": fallback, "attempted_models": candidates}
+
+    return {"error": str(last_exc) if last_exc else 'Unknown error', "attempted_models": candidates}
+    
