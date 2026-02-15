@@ -17,6 +17,34 @@ export default function Dashboard() {
   // primary API base used for single-endpoint code paths (legacy code uses API_BASE)
   const API_BASE = API_BASE_DEFAULTS[0];
 
+  // Helper wrapper that tries each API base in API_BASE_DEFAULTS in order until one succeeds.
+  // endpoint: string starting with '/' (e.g. '/login') or without it. options: method, headers, body, credentials, expectJson
+  const apiFetch = async (endpoint, options = {}) => {
+    const { method = 'GET', headers = {}, body = null, credentials = 'include', expectJson = true } = options || {};
+    const token = localStorage.getItem('access_token');
+    const hdrs = { ...(headers || {}) };
+    if (token && !hdrs['Authorization']) hdrs['Authorization'] = `Bearer ${token}`;
+    if (body && !(body instanceof FormData) && !hdrs['Content-Type']) hdrs['Content-Type'] = 'application/json';
+
+    let lastErr = null;
+    for (const base of API_BASE_DEFAULTS) {
+      const baseUrl = base.replace(/\/$/, '');
+      const url = endpoint.startsWith('/') ? `${baseUrl}${endpoint}` : `${baseUrl}/${endpoint}`;
+      try {
+        const res = await fetch(url, { method, headers: hdrs, body: (hdrs['Content-Type'] === 'application/json' && body && !(body instanceof FormData)) ? JSON.stringify(body) : body, credentials });
+        if (!res.ok) {
+          const txt = await res.text().catch(()=>null);
+          throw new Error(txt || `${res.status} ${res.statusText}`);
+        }
+        return expectJson ? await res.json() : await res.text();
+      } catch (err) {
+        lastErr = err;
+        console.warn('apiFetch failed for', url, err);
+      }
+    }
+    throw lastErr || new Error('apiFetch: all bases failed');
+  };
+
   // debug: show which API base the client will attempt (helpful when env changes)
   if (typeof window !== 'undefined') {
     console.debug("api bases:", API_BASE_DEFAULTS, "-> primary:", API_BASE);
@@ -53,6 +81,8 @@ export default function Dashboard() {
   const [photographersSource, setPhotographersSource] = useState(null);
   const [photographersError, setPhotographersError] = useState(null);
   const [photographersRefreshCounter, setPhotographersRefreshCounter] = useState(0);
+  const [aiSummaries, setAiSummaries] = useState({}); // map propertyId -> {summary, indicator, status, sold_date, confidence}
+  const [aiSyncing, setAiSyncing] = useState(false);
 
   // Build a THEME object that returns light or dark variants depending on darkMode.
   const getTheme = (isDark) => ({
@@ -502,20 +532,16 @@ export default function Dashboard() {
     if (token) headers['Authorization'] = `Bearer ${token}`;
     try {
       if (editingAgent.id) {
-        // update
-        const res = await fetch(`${API_BASE}/agents/${editingAgent.id}`, { method: 'PATCH', headers, body: JSON.stringify({ name: editingAgent.name, email: editingAgent.email, phone: editingAgent.phone, company: editingAgent.company }) });
-        if (!res.ok) throw new Error(`Update failed ${res.status}`);
-        const updated = await res.json();
+        // update (try all API bases)
+        const updated = await apiFetch(`/agents/${editingAgent.id}`, { method: 'PATCH', body: { name: editingAgent.name, email: editingAgent.email, phone: editingAgent.phone, company: editingAgent.company } });
         setAgents(prev => prev.map(a => a.id === updated.id ? updated : a));
         // update properties that referenced the original agent name
         if (editingAgent._origName && editingAgent._origName !== updated.name) {
           setProperties(prev => prev.map(p => (p.agent && p.agent.toLowerCase() === (editingAgent._origName||'').toLowerCase() ? { ...p, agent: updated.name } : p)));
         }
       } else {
-        // create
-        const res = await fetch(`${API_BASE}/agents`, { method: 'POST', headers, body: JSON.stringify({ name: editingAgent.name, email: editingAgent.email, phone: editingAgent.phone, company: editingAgent.company }) });
-        if (!res.ok) throw new Error(`Create failed ${res.status}`);
-        const created = await res.json();
+        // create (try all API bases)
+        const created = await apiFetch('/agents', { method: 'POST', body: { name: editingAgent.name, email: editingAgent.email, phone: editingAgent.phone, company: editingAgent.company } });
         setAgents(prev => [created, ...prev]);
       }
       closeEditAgent();
@@ -531,9 +557,7 @@ export default function Dashboard() {
     const headers = {};
     if (token) headers['Authorization'] = `Bearer ${token}`;
     try {
-      const res = await fetch(`${API_BASE}/agents/${id}`, { method: 'DELETE', headers });
-      if (!res.ok) throw new Error(`Delete failed ${res.status}`);
-      const deleted = await res.json().catch(()=>null);
+      await apiFetch(`/agents/${id}`, { method: 'DELETE', headers });
       const removed = agents.find(a => a.id === id);
       setAgents(prev => prev.filter(a => a.id !== id));
       if (removed && removed.name) {
@@ -678,12 +702,7 @@ export default function Dashboard() {
     const headers = { 'Content-Type': 'application/json' };
     if (token) headers['Authorization'] = `Bearer ${token}`;
     try {
-      const res = await fetch(`${API_BASE}/photographers`, { method: 'POST', headers, body: JSON.stringify(photogForm) });
-      if (!res.ok) {
-        const txt = await res.text().catch(()=>null);
-        throw new Error(txt || `Create photog failed ${res.status}`);
-      }
-      const created = await res.json();
+      const created = await apiFetch('/photographers', { method: 'POST', body: photogForm });
       setPhotographers(prev => [created, ...prev]);
       setPhotogForm({ name: '', email: '', phone: '', company: '' });
       setShowPhotogForm(false);
@@ -699,8 +718,7 @@ export default function Dashboard() {
     const headers = {};
     if (token) headers['Authorization'] = `Bearer ${token}`;
     try {
-      const res = await fetch(`${API_BASE}/photographers/${id}`, { method: 'DELETE', headers });
-      if (!res.ok) throw new Error(`Delete failed ${res.status}`);
+      await apiFetch(`/photographers/${id}`, { method: 'DELETE', headers });
       setPhotographers(prev => prev.filter(p => p.id !== id));
       // also clear photographer reference from properties in state
       setProperties(prev => prev.map(pr => pr.photographer_id === id ? { ...pr, photographer_id: null, photographer: null } : pr));
@@ -716,25 +734,24 @@ export default function Dashboard() {
   const handleLogin = async (e) => {
     e.preventDefault();
     try {
-      const res = await fetch(`${API_BASE}/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: loginForm.name, password: loginForm.password }),
-        credentials: 'include'
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        alert(err?.detail || "Login failed");
+      let body = null;
+      try {
+        body = await apiFetch('/login', { method: 'POST', body: { name: loginForm.name, password: loginForm.password }, credentials: 'include' });
+      } catch (err) {
+        // apiFetch already logged failures; surface message to user
+        alert(String(err?.message || err) || 'Login failed');
         return;
       }
-      const body = await res.json();
       if (body.access_token) {
         // persist token and immediately verify with /me
         console.debug('login: received token', body.access_token && body.access_token.slice(0,8) + '...');
         localStorage.setItem("access_token", body.access_token);
-        const me = await fetch(`${API_BASE}/me`, { headers: { "Authorization": `Bearer ${body.access_token}` }, credentials: 'include' });
-        if (me.ok) setCurrentUser(await me.json());
-        else console.warn('GET /me after login returned', me.status);
+        try {
+          const me = await apiFetch('/me');
+          setCurrentUser(me);
+        } catch (err) {
+          console.warn('GET /me after login returned error', err);
+        }
       } else {
         alert("Login succeeded but no token returned");
       }
@@ -748,40 +765,30 @@ export default function Dashboard() {
   const handleRegister = async (e) => {
     e.preventDefault();
     try {
-      const res = await fetch(`${API_BASE}/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: regForm.name, email: regForm.email, password: regForm.password })
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(()=>null);
-        alert(err?.detail || "Register failed");
+      let body = null;
+      try {
+        body = await apiFetch('/register', { method: 'POST', body: { name: regForm.name, email: regForm.email, password: regForm.password } });
+      } catch (err) {
+        alert(String(err?.message || err) || 'Register failed');
         return;
       }
-      const body = await res.json();
-      if (body.access_token) {
+      if (body && body.access_token) {
         localStorage.setItem("access_token", body.access_token);
-        const me = await fetch(`${API_BASE}/me`, { headers: { "Authorization": `Bearer ${body.access_token}` }});
-        if (me.ok) setCurrentUser(await me.json());
+        try { const me = await apiFetch('/me'); if (me) setCurrentUser(me); } catch(e) { }
         setShowRegister(false);
         return;
       }
       // fallback: try to auto-login if backend didn't return token
-      const loginRes = await fetch(`${API_BASE}/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: regForm.name, password: regForm.password })
-      });
-      if (!loginRes.ok) {
-        alert("Created user but auto-login failed. Try logging in manually.");
-        setShowRegister(false);
-        return;
-      }
-      const loginBody = await loginRes.json();
-      if (loginBody.access_token) {
-        localStorage.setItem("access_token", loginBody.access_token);
-        const me = await fetch(`${API_BASE}/me`, { headers: { "Authorization": `Bearer ${loginBody.access_token}` }});
-        if (me.ok) setCurrentUser(await me.json());
+      try {
+        const loginBody = await apiFetch('/login', { method: 'POST', body: { name: regForm.name, password: regForm.password } });
+        if (loginBody && loginBody.access_token) {
+          localStorage.setItem("access_token", loginBody.access_token);
+          try { const me = await apiFetch('/me'); if (me) setCurrentUser(me); } catch(e) {}
+        } else {
+          alert("Created user but auto-login failed. Try logging in manually.");
+        }
+      } catch (err) {
+        alert('Created user but auto-login failed. Try logging in manually.');
       }
       setShowRegister(false);
     } catch (err) {
@@ -814,16 +821,7 @@ export default function Dashboard() {
     };
 
     try {
-      const res = await fetch(`${API_BASE}/properties`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload)
-      });
-      if (!res.ok) {
-        if (res.status === 401) return alert("You must be logged in to create a property.");
-        throw new Error(`Create failed: ${res.status}`);
-      }
-      const created = await res.json();
+      const created = await apiFetch('/properties', { method: 'POST', body: payload });
       const newProp = {
         id: created.id,
         address: created.address || payload.address,
@@ -837,6 +835,66 @@ export default function Dashboard() {
     } catch (err) {
       console.error("Failed to create property:", err);
       alert("Failed to create property. See console for details.");
+    }
+  };
+
+  // AI sync: request backend to analyze properties and return summaries
+  const handleAiSync = async () => {
+    setAiSyncing(true);
+    setAiSummaries({});
+    try {
+      const token = localStorage.getItem('access_token');
+      const headers = token ? { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
+      let data = null;
+      let lastErr = null;
+      for (const base of API_BASE_DEFAULTS) {
+        const url = `${base.replace(/\/$/, "")}/ai/sync`;
+        try {
+          const res = await fetch(url, { method: 'POST', headers });
+          if (!res.ok) {
+            const txt = await res.text().catch(()=>null);
+            throw new Error(txt || `${res.status} ${res.statusText}`);
+          }
+          data = await res.json();
+          break;
+        } catch (err) {
+          lastErr = err;
+          console.warn('AI sync failed for', url, err);
+        }
+      }
+      if (!data) throw lastErr || new Error('AI sync failed');
+      // data is expected to be mapping of propertyId -> summary object
+      setAiSummaries(data || {});
+      alert('AI sync complete — summaries updated.');
+    } catch (err) {
+      console.error('AI sync error', err);
+      console.error('AI sync failed, attempting local fallback for testing');
+      // Local fallback generator: synthesize basic summaries from properties so devs can test UI without the remote API.
+      try {
+        const fallback = {};
+        (properties || []).forEach(p => {
+          const id = p.id || String(Math.random()).slice(2,8);
+          const status = (p.status || '').toString().toLowerCase();
+          const indicator = status === 'sold' ? 'SOLD' : (status === 'pending' ? 'PENDING' : 'ACTIVE');
+          const price = Number(p.price || 0);
+          const summary = `${p.address || 'Unknown address'} — ${indicator === 'SOLD' ? 'Appears sold' : (indicator === 'PENDING' ? 'Possibly pending' : 'Active listing')}. ${price ? 'List price: $' + price.toLocaleString() + '.' : ''}`;
+          fallback[id] = {
+            summary,
+            indicator,
+            status: indicator,
+            sold_date: null,
+            confidence: 0.25, // low confidence because this is a heuristic fallback
+            _local_fallback: true
+          };
+        });
+        setAiSummaries(fallback);
+        alert('AI sync: remote service unreachable — populated local fallback summaries (test-only).');
+      } catch (ferr) {
+        console.error('Local AI fallback error', ferr);
+        alert('AI sync failed: ' + String(err?.message || err));
+      }
+    } finally {
+      setAiSyncing(false);
     }
   };
 
@@ -1389,6 +1447,23 @@ export default function Dashboard() {
                                   {/* Removed Email Escrow action here to simplify workflow. */}
                                 </div>
                               </div>
+                              {/* AI summary (if available) */}
+                              {(() => {
+                                const s = (aiSummaries && (aiSummaries[prop.id] || aiSummaries[String(prop.id)])) || null;
+                                if (!s) return null;
+                                const indicator = (s.indicator || s.status || '').toString().toUpperCase();
+                                return (
+                                  <div className="mt-3 border-t pt-3 text-sm text-slate-700 dark:text-slate-300">
+                                    <div className="text-xs text-slate-500">AI Summary</div>
+                                    <div className="mt-1">{s.summary || s.preview || JSON.stringify(s)}</div>
+                                    {indicator ? (
+                                      <div className={`mt-2 inline-block px-2 py-1 rounded-full text-xs font-bold ${indicator === 'SOLD' ? THEME.soldBadge : (indicator === 'PENDING' ? THEME.pendingBadge : THEME.activeBadge)}`}>
+                                        {`INDICATES ${indicator}`}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                );
+                              })()}
                             </td>
                           </tr>
                         )}
@@ -1418,6 +1493,21 @@ export default function Dashboard() {
                       </div>
                     </div>
 
+                    {/* AI snippet for mobile card */}
+                    {(() => {
+                      const s = (aiSummaries && (aiSummaries[prop.id] || aiSummaries[String(prop.id)])) || null;
+                      if (!s) return null;
+                      const indicator = (s.indicator || s.status || '').toString().toUpperCase();
+                      return (
+                        <div className="mt-3 text-sm text-slate-700 dark:text-slate-300">
+                          <div className="text-xs text-slate-500">AI</div>
+                          <div className="mt-1">{s.summary || s.preview || ''}</div>
+                          {indicator ? (
+                            <div className={`mt-2 inline-block px-2 py-1 rounded-full text-xs font-bold ${indicator === 'SOLD' ? THEME.soldBadge : (indicator === 'PENDING' ? THEME.pendingBadge : THEME.activeBadge)}`}>{`INDICATES ${indicator}`}</div>
+                          ) : null}
+                        </div>
+                      );
+                    })()}
                     {/* Expanded mobile actions */}
                     {expandedIds.includes(prop.id) && (
                       <div className="mt-3 flex gap-2">
@@ -1694,8 +1784,15 @@ export default function Dashboard() {
                   {/* Listings tab: full-page search/sort/list view */}
                   {selectedTab === 'listings' && !loading && (
                     <div className="mb-6">
-                      <div className={THEME.cardDark}>
+                      <div className={`${THEME.cardDark} relative`}>
                         <h3 className="font-semibold mb-3">Listings — Search & Browse</h3>
+
+                        {/* Sync AI button pinned to the top-right corner of the card */}
+                        <div className="absolute right-4 top-4">
+                          <button onClick={handleAiSync} className={`${THEME.btnPrimary} px-3 py-2 rounded-md`}>
+                            {aiSyncing ? 'Syncing…' : 'Sync AI'}
+                          </button>
+                        </div>
 
                         <div className="mb-4 grid grid-cols-1 md:grid-cols-3 gap-3">
                           <input placeholder="Search address or agent" value={listingSearch} onChange={(e) => setListingSearch(e.target.value)} className={`${THEME.inputDark} p-2 col-span-2`} />
@@ -1720,7 +1817,23 @@ export default function Dashboard() {
                             <tbody className={THEME.bodyDivideDark}>
                               {sortedListings.map(l => (
                                 <tr key={l.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition">
-                                  <td className="p-4 font-medium">{l.address}</td>
+                                  <td className="p-4 font-medium">
+                                    {l.address}
+                                    {(() => {
+                                      const s = (aiSummaries && (aiSummaries[l.id] || aiSummaries[String(l.id)])) || null;
+                                      if (!s) return null;
+                                      const indicator = (s.indicator || s.status || '').toString().toUpperCase();
+                                      return (
+                                        <div className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                                          <div className="text-xs text-slate-500">AI</div>
+                                          <div className="mt-1">{s.summary || s.preview || ''}</div>
+                                          {indicator ? (
+                                            <div className={`mt-1 inline-block px-2 py-1 rounded-full text-xs font-bold ${indicator === 'SOLD' ? THEME.soldBadge : (indicator === 'PENDING' ? THEME.pendingBadge : THEME.activeBadge)}`}>{`INDICATES ${indicator}`}</div>
+                                          ) : null}
+                                        </div>
+                                      );
+                                    })()}
+                                  </td>
                                   <td className="p-4"> <span className={`px-3 py-1 rounded-full text-xs font-bold ${l.status === 'Sold' ? THEME.soldBadge : (l.status === 'Pending' ? THEME.pendingBadge : THEME.activeBadge)}`}>{l.status}</span></td>
                                   <td className="p-4">${Number(l.price || 0).toFixed(2)}</td>
                                   <td className="p-4">{l.paid ? 'Yes' : 'No'}</td>
@@ -1969,6 +2082,14 @@ export default function Dashboard() {
           </form>
         </div>
       )}
+      {/* Fixed theme toggle button in bottom-left (persistent). Visible across pages. */}
+      <button
+        onClick={toggleDarkMode}
+        aria-label="Toggle color theme"
+        className="fixed left-4 bottom-4 z-50 p-3 rounded-full bg-white border border-slate-200 text-slate-700 shadow-md hover:bg-green-50 dark:bg-[#1C1C1C] dark:border-slate-700 dark:text-slate-200 dark:hover:bg-[#122016]"
+      >
+        {darkMode ? <Sun size={16} /> : <Moon size={16} />}
+      </button>
     </div>
   );
 }

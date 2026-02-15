@@ -19,6 +19,9 @@ export default function PropertyDetailPage() {
   const [photographers, setPhotographers] = useState([]);
   const [agents, setAgents] = useState([]);
   const [matchedAgent, setMatchedAgent] = useState(null);
+  const [aiSummary, setAiSummary] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState(null);
   const [darkMode, setDarkMode] = useState(false);
 
   // initialize darkMode from persisted preference or system preference
@@ -151,6 +154,48 @@ export default function PropertyDetailPage() {
       // ignore
     }
   }, [property, agents]);
+
+  // Fetch AI summary for this property address (best-effort). Attempts each base in order.
+  useEffect(() => {
+    let mounted = true;
+    const fetchAi = async () => {
+      if (!property || !property.address) return;
+      setAiLoading(true);
+      setAiError(null);
+      setAiSummary(null);
+      let lastErr = null;
+        for (const baseRaw of API_BASE_DEFAULTS) {
+        const base = baseRaw.replace(/\/$/, "");
+        const url = `${base}/ai/summary?address=${encodeURIComponent(property.address)}`;
+        try {
+          const token = localStorage.getItem('access_token');
+          const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+          const res = await fetch(url, { headers, credentials: 'include' });
+          if (!res.ok) {
+            // surface 401 specifically so UI can show helpful hint
+            if (res.status === 401) {
+              lastErr = new Error('Unauthorized - please log in to request AI summaries');
+            } else {
+              lastErr = new Error(`${res.status} ${res.statusText}`);
+            }
+            continue;
+          }
+          const data = await res.json();
+          if (!mounted) return;
+          setAiSummary(data);
+          setAiLoading(false);
+          return;
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      if (!mounted) return;
+      setAiLoading(false);
+      setAiError(lastErr ? String(lastErr?.message || lastErr) : 'AI summary unavailable');
+    };
+    fetchAi();
+    return () => { mounted = false; };
+  }, [property]);
 
   const togglePaid = async (setTo) => {
     if (!property) return;
@@ -294,6 +339,31 @@ export default function PropertyDetailPage() {
                   <div className="font-medium">{property.photographer ? (property.photographer.name || property.photographer) : (property.photographer_id ? `#${property.photographer_id}` : '—')}</div>
                 </div>
 
+                {/* AI summary block: shows short AI description and flags status mismatches */}
+                <div className="mt-4">
+                  <div className="text-xs text-slate-500">AI Summary</div>
+                  {aiLoading ? (
+                    <div className="text-sm text-slate-500 mt-1">Checking…</div>
+                  ) : aiError ? (
+                    <div className="text-sm text-red-500 mt-1">{aiError}</div>
+                  ) : aiSummary ? (
+                    <div className="mt-1 text-sm text-slate-700 dark:text-slate-300">
+                      <div>{aiSummary.summary || aiSummary.preview || aiSummary.status || 'No summary available'}</div>
+                      {(() => {
+                        const aiIndicator = (aiSummary.indicator || aiSummary.status || '').toString().toLowerCase();
+                        const stored = (property.status || '').toString().toLowerCase();
+                        if (aiIndicator && stored && aiIndicator !== stored) {
+                          return (
+                            <div className="mt-2 text-xs font-semibold text-amber-700">AI indicates "{(aiSummary.indicator || aiSummary.status)}" which differs from stored status "{property.status}"</div>
+                          );
+                        }
+                        return null;
+                      })()}
+                    </div>
+                  ) : (
+                    <div className="text-sm text-slate-500 mt-1">No AI summary available.</div>
+                  )}
+                </div>
                 {/* Agent contact information (if available) */}
                 <div className="mt-4">
                   <div className="text-xs text-slate-500">Agent</div>

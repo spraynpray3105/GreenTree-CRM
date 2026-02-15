@@ -10,6 +10,7 @@ import os
 from database import SessionLocal, Property, User, Photographer, Statistic, Agent  # ensure Photographer + Statistic + Agent models are available
 from sun_logic import get_optimal_times
 from geopy.geocoders import Nominatim
+from ai_services import get_property_update
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -276,6 +277,116 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
 @app.get("/me")
 def me(current_user: User = Depends(get_current_user)):
     return {"id": current_user.id, "name": current_user.name, "email": current_user.email}
+
+
+# ----------------------
+# AI helpers / endpoints
+# ----------------------
+@app.get("/ai/summary")
+def ai_summary(address: str, current_user: User = Depends(get_current_user)):
+    """Return a short AI-generated summary for a single property address.
+    Uses `ai_services.get_property_update` and returns a compact summary and an indicator.
+    """
+    res = get_property_update(address)
+    # If helper returned an error dict, surface it as 502 with helpful message
+    if isinstance(res, dict) and res.get('error'):
+        raise HTTPException(status_code=502, detail=f"AI service error: {res.get('error')}")
+
+    # Normalize response and build short summary
+    if not isinstance(res, dict):
+        raise HTTPException(status_code=500, detail="AI returned unexpected response")
+
+    status = (res.get('status') or '').title() if res.get('status') else 'Unknown'
+    sold_date = res.get('sold_date')
+    confidence = res.get('confidence')
+
+    short = status
+    if sold_date:
+        short += f" on {sold_date}"
+    if confidence is not None:
+        try:
+            short += f" (confidence {float(confidence):.2f})"
+        except Exception:
+            pass
+
+    indicator = None
+    if status.lower() == 'sold':
+        indicator = 'SOLD'
+    elif status.lower() == 'active':
+        indicator = 'ACTIVE'
+    elif status.lower() == 'pending':
+        indicator = 'PENDING'
+
+    return { 'address': address, 'status': status, 'sold_date': sold_date, 'confidence': confidence, 'summary': short, 'indicator': indicator }
+
+
+@app.post("/ai/sync")
+def ai_sync_properties(payload: dict | None = None, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Sync AI summaries for properties belonging to the current user's company.
+    Optional JSON body: { "property_ids": [1,2,3] } to limit to specific properties.
+    Returns a mapping of property_id -> ai summary object.
+    """
+    try:
+        # Select properties scoped to the current user's company for SaaS safety
+        q = db.query(Property)
+        if current_user and getattr(current_user, 'company', None):
+            q = q.filter(Property.company == current_user.company)
+
+        # If payload requests specific ids, filter
+        ids = None
+        if payload and isinstance(payload, dict):
+            ids = payload.get('property_ids')
+        if ids:
+            q = q.filter(Property.id.in_(ids))
+
+        props = q.all()
+    except ProgrammingError:
+        db.rollback()
+        # Fallback: textual select
+        rows = db.execute(text("SELECT id, address FROM properties")).mappings().all()
+        props = [ SimpleNamespace(**r) for r in rows ]
+
+    results = {}
+    for p in props:
+        addr = getattr(p, 'address', None)
+        if not addr:
+            continue
+        try:
+            aires = get_property_update(addr)
+        except Exception as e:
+            results[getattr(p, 'id', addr)] = { 'error': str(e) }
+            continue
+
+        status = (aires.get('status') or '').title() if aires and isinstance(aires, dict) else 'Unknown'
+        sold_date = aires.get('sold_date') if isinstance(aires, dict) else None
+        confidence = aires.get('confidence') if isinstance(aires, dict) else None
+        short = status
+        if sold_date:
+            short += f" on {sold_date}"
+        if confidence is not None:
+            try:
+                short += f" (confidence {float(confidence):.2f})"
+            except Exception:
+                pass
+
+        indicator = None
+        if status.lower() == 'sold':
+            indicator = 'SOLD'
+        elif status.lower() == 'active':
+            indicator = 'ACTIVE'
+        elif status.lower() == 'pending':
+            indicator = 'PENDING'
+
+        results[getattr(p, 'id', addr)] = {
+            'address': addr,
+            'status': status,
+            'sold_date': sold_date,
+            'confidence': confidence,
+            'summary': short,
+            'indicator': indicator
+        }
+
+    return results
 
 
 # ----- Statistics models & endpoints -----
