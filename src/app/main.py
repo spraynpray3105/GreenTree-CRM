@@ -1,5 +1,8 @@
 from fastapi import FastAPI, Depends, HTTPException, status, Response, Request
 from sqlalchemy.orm import Session
+from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
+from types import SimpleNamespace
 from pydantic import BaseModel
 from datetime import datetime, timedelta
 import os
@@ -37,6 +40,51 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+# Helper: safe user lookup wrappers. Some deployed DBs may not have new columns yet
+# (for example `users.company`), which would make ORM queries raise ProgrammingError.
+# These helpers attempt an ORM query first and fall back to a textual select of the
+# known columns so the app continues to authenticate until you run a migration.
+def _user_from_row(row):
+    if not row:
+        return None
+    # row may be an ORM-mapped User instance or a mapping result
+    if isinstance(row, SimpleNamespace) or hasattr(row, 'id') and hasattr(row, 'name'):
+        return row
+    try:
+        # SQLAlchemy MappingResult -> dict-like
+        m = dict(row)
+        return SimpleNamespace(**m)
+    except Exception:
+        return row
+
+def find_user_by_name(db: Session, name: str):
+    try:
+        return db.query(User).filter(User.name == name).first()
+    except ProgrammingError:
+        # likely the DB schema missing a column; rollback and run a safe text query
+        db.rollback()
+        row = db.execute(text("SELECT id, name, email, hashed_password, created_at FROM users WHERE name = :name LIMIT 1"), {"name": name}).mappings().first()
+        return _user_from_row(row)
+
+
+def find_user_by_email(db: Session, email: str):
+    try:
+        return db.query(User).filter(User.email == email).first()
+    except ProgrammingError:
+        db.rollback()
+        row = db.execute(text("SELECT id, name, email, hashed_password, created_at FROM users WHERE email = :email LIMIT 1"), {"email": email}).mappings().first()
+        return _user_from_row(row)
+
+
+def find_user_by_id(db: Session, user_id: int):
+    try:
+        return db.query(User).filter(User.id == user_id).first()
+    except ProgrammingError:
+        db.rollback()
+        row = db.execute(text("SELECT id, name, email, hashed_password, created_at FROM users WHERE id = :id LIMIT 1"), {"id": user_id}).mappings().first()
+        return _user_from_row(row)
 
 # ----------------------
 # Auth configuration
@@ -109,10 +157,10 @@ class PhotographerCreate(BaseModel):
 def register(user_in: UserCreate, response: Response, db: Session = Depends(get_db)):
     # check by email if provided, otherwise by name
     if user_in.email:
-        exists = db.query(User).filter(User.email == user_in.email).first()
+        exists = find_user_by_email(db, user_in.email)
         if exists:
             raise HTTPException(status_code=400, detail="Email already registered")
-    exists_name = db.query(User).filter(User.name == user_in.name).first()
+    exists_name = find_user_by_name(db, user_in.name)
     if exists_name:
         raise HTTPException(status_code=400, detail="Username already registered")
 
@@ -145,9 +193,9 @@ def login(creds: UserLogin, response: Response, db: Session = Depends(get_db)):
     # allow login by email or name
     user = None
     if creds.email:
-        user = db.query(User).filter(User.email == creds.email).first()
+        user = find_user_by_email(db, creds.email)
     elif creds.name:
-        user = db.query(User).filter(User.name == creds.name).first()
+        user = find_user_by_name(db, creds.name)
 
     if not user or not verify_password(creds.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
@@ -179,7 +227,7 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
     user_id = payload.get("user_id")
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
-    user = db.query(User).filter(User.id == user_id).first()
+    user = find_user_by_id(db, user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user
@@ -211,7 +259,7 @@ def create_property(prop_data: PropertyCreate, current_user: User = Depends(get_
     db.commit()
     db.refresh(new_prop)
     return new_prop
-
+ 
 
 # ----------------------
 # Photographers endpoints
