@@ -158,6 +158,8 @@ class PropertyCreate(BaseModel):
     photographer_id: int | None = None
     company: str | None = None
 
+class PaidUpdate(BaseModel):
+    paid: bool
 class PhotographerCreate(BaseModel):
     name: str
     email: str | None = None
@@ -309,8 +311,18 @@ def get_properties(db: Session = Depends(get_db)):
     except ProgrammingError:
         # rollback the failed transaction and run a safe text query
         db.rollback()
-        rows = db.execute(text("SELECT id, address, status, price, agent, company FROM properties")).mappings().all()
-        return [dict(r) for r in rows]
+        # try to include `paid` if the column exists; if not, fall back to a select without it
+        try:
+            rows = db.execute(text("SELECT id, address, status, price, agent, company, paid FROM properties")).mappings().all()
+            return [dict(r) for r in rows]
+        except ProgrammingError:
+            db.rollback()
+            rows = db.execute(text("SELECT id, address, status, price, agent, company FROM properties")).mappings().all()
+            # ensure a `paid` key is present for frontend convenience
+            out = [dict(r) for r in rows]
+            for o in out:
+                o.setdefault('paid', False)
+            return out
 
 @app.post("/properties", status_code=201)
 def create_property(prop_data: PropertyCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -327,6 +339,51 @@ def create_property(prop_data: PropertyCreate, current_user: User = Depends(get_
     db.commit()
     db.refresh(new_prop)
     return new_prop
+ 
+
+# Get a single property by id (public read)
+@app.get("/properties/{property_id}")
+def get_property(property_id: int, db: Session = Depends(get_db)):
+    try:
+        prop = db.query(Property).filter(Property.id == property_id).first()
+        if not prop:
+            raise HTTPException(status_code=404, detail="Property not found")
+        return prop
+    except ProgrammingError:
+        db.rollback()
+        # attempt textual selects; first try including `paid`, then without
+        try:
+            row = db.execute(text("SELECT id, address, status, price, agent, company, photographer_id, paid FROM properties WHERE id = :id LIMIT 1"), {"id": property_id}).mappings().first()
+            if not row:
+                raise HTTPException(status_code=404, detail="Property not found")
+            r = dict(row)
+            return r
+        except ProgrammingError:
+            db.rollback()
+            row = db.execute(text("SELECT id, address, status, price, agent, company, photographer_id FROM properties WHERE id = :id LIMIT 1"), {"id": property_id}).mappings().first()
+            if not row:
+                raise HTTPException(status_code=404, detail="Property not found")
+            r = dict(row)
+            r.setdefault('paid', False)
+            return r
+
+
+# Mark property as paid/unpaid (protected)
+@app.post("/properties/{property_id}/paid")
+def set_property_paid(property_id: int, paid_update: PaidUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    try:
+        prop = db.query(Property).filter(Property.id == property_id).first()
+        if not prop:
+            raise HTTPException(status_code=404, detail="Property not found")
+        prop.paid = bool(paid_update.paid)
+        db.add(prop)
+        db.commit()
+        db.refresh(prop)
+        return {"id": prop.id, "paid": prop.paid}
+    except ProgrammingError:
+        db.rollback()
+        # If the `paid` column doesn't exist, inform the client
+        raise HTTPException(status_code=400, detail="Paid flag not available on the database. Run migrations to add the column.")
  
 
 # ----------------------

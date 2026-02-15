@@ -1,6 +1,7 @@
 "use client";
 import React, { useEffect, useState } from "react";
 import { Home, DollarSign, Mail, Search, Moon, Sun, BarChart, Menu, X } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 
 export default function Dashboard() {
   // API base: prefer NEXT_PUBLIC_API_BASE when explicitly set (override),
@@ -115,6 +116,13 @@ export default function Dashboard() {
   const [watcherLoading, setWatcherLoading] = useState(false);
   const [watcherResult, setWatcherResult] = useState(null);
   const [watcherError, setWatcherError] = useState(null);
+
+  // Listings menu state (left of main): search + sort
+  const [listingSearch, setListingSearch] = useState("");
+  const [listingSort, setListingSort] = useState("newest"); // newest | price_asc | price_desc
+
+  // Next.js router for navigation to property detail pages
+  const router = useRouter();
 
   // Responsive: auto-close mobile sidebar when switching to desktop
   useEffect(() => {
@@ -377,6 +385,26 @@ export default function Dashboard() {
       prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
     );
   };
+
+  // Derived listing collections used by the left-menu and dashboard
+  const filteredListings = (properties || []).filter(p => {
+    try {
+      return String(p.address || "").toLowerCase().includes(listingSearch.toLowerCase());
+    } catch (e) { return false; }
+  });
+
+  const sortedListings = filteredListings.slice().sort((a, b) => {
+    if (listingSort === 'price_asc') return (Number(a.price || 0) - Number(b.price || 0));
+    if (listingSort === 'price_desc') return (Number(b.price || 0) - Number(a.price || 0));
+    // newest - sort by id desc as a simple proxy
+    return (Number(b.id || 0) - Number(a.id || 0));
+  });
+
+  const dashboardProperties = (properties || []).filter(p => {
+    const status = (p.status || '').toString().toLowerCase();
+    const paid = ('paid' in p) ? !!p.paid : false;
+    return (status === 'pending' || status === 'sold') && !paid;
+  });
 
   // Email escrow action removed — simplified dashboard actions.
 
@@ -666,6 +694,8 @@ export default function Dashboard() {
                 <button type="button" onClick={() => setShowRegister(false)} className="px-4 py-2 rounded-md bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-slate-100">Cancel</button>
                 <button type="submit" className={`px-4 py-2 rounded-md ${THEME.btnPrimary} ${THEME.btnPrimaryDark} text-white`}>Create</button>
               </div>
+
+              <div className="clear-both" />
             </form>
           </div>
         )}
@@ -693,11 +723,13 @@ export default function Dashboard() {
           </button>
 
           {/* Center area contains app title and current page subtitle */}
-          <div className="text-center">
+            <div className="text-center">
             {/* Header title (uses THEME.headerTitle for typography) */}
             <div className={THEME.headerTitle}>Green Tree</div>
             {/* Small subtitle showing current selected tab */}
-            <div className={THEME.headerSubtitle}>{selectedTab === 'dashboard' ? 'Dashboard' : selectedTab === 'customers' ? 'Customers' : selectedTab === 'photographers' ? 'Photographers' : 'Statistics'}</div>
+            <div className={THEME.headerSubtitle}>
+              {selectedTab === 'dashboard' ? 'Dashboard' : selectedTab === 'customers' ? 'Customers' : selectedTab === 'listings' ? 'Listings' : selectedTab === 'photographers' ? 'Photographers' : selectedTab === 'statistics' ? 'Statistics' : selectedTab === 'watcher' ? 'Watcher' : ''}
+            </div>
           </div>
 
           {/* Right area: dark mode toggle and primary add button */}
@@ -747,6 +779,15 @@ export default function Dashboard() {
               className={`flex items-center gap-3 ${selectedTab === 'photographers' ? THEME.tabSelected : THEME.tabDefault}`}
             >
               <Menu size={20}/> Photographers
+            </a>
+
+            {/* Listings link */}
+            <a
+              href="#"
+              onClick={(e) => { e.preventDefault(); setSelectedTab('listings'); }}
+              className={`flex items-center gap-3 ${selectedTab === 'listings' ? THEME.tabSelected : THEME.tabDefault}`}
+            >
+              <Search size={20}/> Listings
             </a>
 
             {/* Statistics link */}
@@ -811,6 +852,14 @@ export default function Dashboard() {
                 <DollarSign size={18}/> Customers
               </a>
 
+              <a
+                href="#"
+                onClick={(e) => { e.preventDefault(); setSelectedTab('listings'); setShowSidebar(false); }}
+                className={`flex items-center gap-3 ${selectedTab === 'listings' ? THEME.tabMobileSelected : THEME.tabDefault}`}
+              >
+                <Search size={18}/> Listings
+              </a>
+
                 <a
                   href="#"
                   onClick={(e) => { e.preventDefault(); setSelectedTab('photographers'); setShowSidebar(false); }}
@@ -864,16 +913,20 @@ export default function Dashboard() {
             <div>
               {/* Page title and subtitle use THEME.pageTitle / THEME.pageSubtitle */}
               <h2 className={THEME.pageTitle}>
-                {selectedTab === 'dashboard' ? 'Main Dashboard' : selectedTab === 'customers' ? 'Customer Database' : selectedTab === 'photographers' ? 'Photographers' : 'Statistics'}
+                {selectedTab === 'dashboard' ? 'Main Dashboard' : selectedTab === 'customers' ? 'Customer Database' : selectedTab === 'listings' ? 'Listings' : selectedTab === 'photographers' ? 'Photographers' : selectedTab === 'statistics' ? 'Statistics' : selectedTab === 'watcher' ? 'Watcher' : ''}
               </h2>
               <p className={THEME.pageSubtitle}>
                 {selectedTab === 'dashboard'
                   ? `Welcome, ${currentUser?.name || loginForm.name || 'Guest'}. Manage your real estate photography escrow.`
                   : selectedTab === 'customers'
                   ? 'Example customer records. Will be connected to MySQL later.'
+                  : selectedTab === 'listings'
+                  ? 'Search and browse listings.'
                   : selectedTab === 'photographers'
                   ? 'Manage photographers who shoot your properties.'
-                  : 'Summary statistics (fake data for now).'}
+                  : selectedTab === 'statistics'
+                  ? 'Summary statistics (fake data for now).'
+                  : 'Find best times and lighting for shoots.'}
               </p>
             </div>
 
@@ -908,6 +961,8 @@ export default function Dashboard() {
                   <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Estimated value of unsold / unpaid listings.</p>
                 </div>
               </div>
+
+              {/* Listings panel moved to its own Listings tab. Use the Listings tab in the sidebar to view/search listings. */}
 
               {/* Timeseries: Average shoots vs income (last 30 days) */}
               <div className={THEME.cardDark + " mb-6"}>
@@ -1001,7 +1056,7 @@ export default function Dashboard() {
 
                   {/* Table body: THEME.bodyDivideDark controls row dividers */}
                   <tbody className={THEME.bodyDivideDark}>
-                    {properties.map((prop) => (
+                    {dashboardProperties.map((prop) => (
                       <React.Fragment key={prop.id}>
                         {/* Row: clicking toggles expansion. hover:bg classes provide feedback */}
                         <tr
@@ -1039,7 +1094,7 @@ export default function Dashboard() {
                                 <div className="flex items-center gap-3">
                                   {/* View button uses THEME.btnPrimary */}
                                   <button
-                                    onClick={(e) => { e.stopPropagation(); }}
+                                    onClick={(e) => { e.stopPropagation(); router.push(`/property/${prop.id}`); }}
                                     className={`px-4 py-2 ${THEME.btnPrimary} ${THEME.btnPrimaryDark} text-white rounded-md text-sm`}
                                   >
                                     View
@@ -1059,7 +1114,7 @@ export default function Dashboard() {
 
               {/* DASHBOARD CARDS (mobile) */}
               <div className="md:hidden space-y-4">
-                {properties.map(prop => (
+                {dashboardProperties.map(prop => (
                   <article
                     key={prop.id}
                     onClick={() => toggleExpand(prop.id)}
@@ -1081,7 +1136,7 @@ export default function Dashboard() {
                     {expandedIds.includes(prop.id) && (
                       <div className="mt-3 flex gap-2">
                         <button
-                          onClick={(e) => { e.stopPropagation(); }}
+                          onClick={(e) => { e.stopPropagation(); router.push(`/property/${prop.id}`); }}
                           className={`flex-1 px-3 py-2 ${THEME.btnPrimary} ${THEME.btnPrimaryDark} text-white rounded-md text-sm`}
                         >
                           View
@@ -1348,8 +1403,50 @@ export default function Dashboard() {
               </div>
             </div>
           )}
+                  {/* Listings tab: full-page search/sort/list view */}
+                  {selectedTab === 'listings' && !loading && (
+                    <div className="mb-6">
+                      <div className={THEME.cardDark}>
+                        <h3 className="font-semibold mb-3">Listings — Search & Browse</h3>
 
-          {/* Grid of stat cards; THEME.cardDark keeps consistent look with other panels */}
+                        <div className="mb-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+                          <input placeholder="Search address or agent" value={listingSearch} onChange={(e) => setListingSearch(e.target.value)} className={`${THEME.inputDark} p-2 col-span-2`} />
+                          <select value={listingSort} onChange={(e) => setListingSort(e.target.value)} className={`${THEME.inputDark} p-2`}>
+                            <option value="newest">Newest</option>
+                            <option value="price_asc">Price ↑</option>
+                            <option value="price_desc">Price ↓</option>
+                          </select>
+                        </div>
+
+                        <div className="overflow-x-auto">
+                          <table className="w-full">
+                            <thead className={THEME.tableHeadDark}>
+                              <tr>
+                                <th className="p-4 text-left font-medium">Address</th>
+                                <th className="p-4 text-left font-medium">Status</th>
+                                <th className="p-4 text-left font-medium">Price</th>
+                                <th className="p-4 text-left font-medium">Paid</th>
+                                <th className="p-4 text-right">Action</th>
+                              </tr>
+                            </thead>
+                            <tbody className={THEME.bodyDivideDark}>
+                              {sortedListings.map(l => (
+                                <tr key={l.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition">
+                                  <td className="p-4 font-medium">{l.address}</td>
+                                  <td className="p-4"> <span className={`px-3 py-1 rounded-full text-xs font-bold ${l.status === 'Sold' ? THEME.soldBadge : THEME.activeBadge}`}>{l.status}</span></td>
+                                  <td className="p-4">${Number(l.price || 0).toFixed(2)}</td>
+                                  <td className="p-4">{l.paid ? 'Yes' : 'No'}</td>
+                                  <td className="p-4 text-right"><button onClick={() => router.push(`/property/${l.id}`)} className="px-3 py-1 bg-blue-600 text-white rounded-md">View</button></td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Grid of stat cards; THEME.cardDark keeps consistent look with other panels */}
           {selectedTab === 'statistics' && !loading && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {(() => {

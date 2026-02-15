@@ -4,7 +4,7 @@ load_dotenv()  # load .env before reading DATABASE_URL or SECRET_KEY
 import os
 
 # SQLAlchemy imports for engine, model and session setup
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Date
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Date, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -35,6 +35,8 @@ class Property(Base):
     # reference to a photographer (optional)
     photographer_id = Column(Integer, ForeignKey('photographers.id'), nullable=True)
     photographer = relationship('Photographer', back_populates='properties', lazy='joined')
+    # whether the property has been paid/invoiced
+    paid = Column(Boolean, default=False, nullable=False)
 
     def __repr__(self):
         return f"<Property id={self.id} address={self.address!r}>"
