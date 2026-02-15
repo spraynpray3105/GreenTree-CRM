@@ -52,7 +52,7 @@ export default function Dashboard() {
     cardSmallDark: "bg-white dark:bg-[#262626]",
     inputDark: "bg-white dark:bg-[#262626] dark:border-[#0b2b20] text-slate-900 dark:text-slate-100 rounded-md px-3 py-2",
     soldBadge: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
-    activeBadge: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+  activeBadge: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
   };
 
   // data & UI state
@@ -111,6 +111,17 @@ export default function Dashboard() {
         return sum + (isNaN(price) ? 0 : price);
       }, 0)
     : 0;
+  // Derived stats for report rendering (used in Statistics tab and report)
+  const statsParsed = Array.isArray(statsData) ? statsData.map(s => ({
+    date: s.date,
+    shoots: Number(s.shoots_count ?? s.shoots ?? 0),
+    income: Number(s.income_total ?? s.income ?? 0)
+  })) : [];
+  const statsDays = statsParsed.length || 30;
+  const statsTotalShoots = statsParsed.reduce((sum, p) => sum + (p.shoots || 0), 0);
+  const statsTotalIncome = statsParsed.reduce((sum, p) => sum + (p.income || 0), 0);
+  const statsAvgShootsPerDay = statsDays ? (statsTotalShoots / statsDays) : 0;
+  const statsAvgIncomePerShoot = statsTotalShoots ? (statsTotalIncome / statsTotalShoots) : 0;
   // Watcher/sun times UI state
   const [watcherAddress, setWatcherAddress] = useState("");
   const [watcherLoading, setWatcherLoading] = useState(false);
@@ -384,6 +395,85 @@ export default function Dashboard() {
     setExpandedIds(prev =>
       prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
     );
+  };
+
+  // Generate a printable report in a new window and trigger print (user can Save as PDF)
+  const generateReport = () => {
+    try {
+      const parsed = Array.isArray(statsData) ? statsData.map(s => ({ date: s.date, shoots: Number(s.shoots_count ?? s.shoots ?? 0), income: Number(s.income_total ?? s.income ?? 0) })) : [];
+      const days = parsed.length || 30;
+      const totalShoots = parsed.reduce((sum, p) => sum + (p.shoots || 0), 0);
+      const totalIncome = parsed.reduce((sum, p) => sum + (p.income || 0), 0);
+      const avgShootsPerDay = days ? (totalShoots / days) : 0;
+      const avgIncomePerShoot = totalShoots ? (totalIncome / totalShoots) : 0;
+      const totalProperties = Array.isArray(properties) ? properties.length : 0;
+      const soldCount = Array.isArray(properties) ? properties.filter(p => (p.status || '').toLowerCase() === 'sold').length : 0;
+      const soldPercent = totalProperties ? Math.round((soldCount / totalProperties) * 100) : 0;
+      const photographersCount = Array.isArray(photographers) ? photographers.length : 0;
+      const unpaidTotal = totalUnpaid || 0;
+
+      const title = 'Company Metrics Report';
+      const now = new Date().toLocaleString();
+
+      // build HTML report (simple table + summary). Keep styles inline for printing.
+      const html = `
+        <html>
+          <head>
+            <title>${title}</title>
+            <meta charset="utf-8" />
+            <style>
+              body { font-family: -apple-system, system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; color: #111827; padding: 24px; }
+              h1 { font-size: 20px; margin-bottom: 6px }
+              .muted { color: #6b7280; font-size: 12px }
+              .grid { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 18px }
+              .card { border: 1px solid #e6e6e6; padding: 12px; border-radius: 8px; min-width: 140px }
+              table { width: 100%; border-collapse: collapse; margin-top: 12px }
+              th, td { padding: 8px 6px; border: 1px solid #eee; text-align: left }
+              .right { text-align: right }
+              @media print { .no-print { display: none } }
+            </style>
+          </head>
+          <body>
+            <div class="no-print" style="margin-bottom:12px"><strong>${title}</strong> — Generated: ${now}</div>
+            <h1>${title}</h1>
+            <div class="muted">Summary of company metrics and timeseries data</div>
+
+            <div class="grid">
+              <div class="card"><div class="muted">Total shoots (last ${days} days)</div><div style="font-size:18px;font-weight:700;margin-top:6px">${totalShoots}</div></div>
+              <div class="card"><div class="muted">Avg shoots / day</div><div style="font-size:18px;font-weight:700;margin-top:6px">${avgShootsPerDay.toFixed(1)}</div></div>
+              <div class="card"><div class="muted">Total income (last ${days} days)</div><div style="font-size:18px;font-weight:700;margin-top:6px">$${Math.round(totalIncome).toLocaleString()}</div></div>
+              <div class="card"><div class="muted">Avg income / shoot</div><div style="font-size:18px;font-weight:700;margin-top:6px">$${avgIncomePerShoot.toFixed(0)}</div></div>
+              <div class="card"><div class="muted">Listings sold %</div><div style="font-size:18px;font-weight:700;margin-top:6px">${soldPercent}%</div></div>
+              <div class="card"><div class="muted">Total properties</div><div style="font-size:18px;font-weight:700;margin-top:6px">${totalProperties}</div></div>
+              <div class="card"><div class="muted">Photographers</div><div style="font-size:18px;font-weight:700;margin-top:6px">${photographersCount}</div></div>
+              <div class="card"><div class="muted">Total unpaid</div><div style="font-size:18px;font-weight:700;margin-top:6px">$${Math.round(unpaidTotal).toLocaleString()}</div></div>
+            </div>
+
+            <h2 style="margin-top:12px">Timeseries</h2>
+            <div class="muted">Date | Shoots | Income</div>
+            <table>
+              <thead><tr><th>Date</th><th class="right">Shoots</th><th class="right">Income</th></tr></thead>
+              <tbody>
+                ${parsed.map(p => `<tr><td>${p.date}</td><td class="right">${p.shoots}</td><td class="right">$${p.income.toFixed(2)}</td></tr>`).join('')}
+              </tbody>
+            </table>
+
+            <div style="margin-top:18px" class="muted">End of report</div>
+            <script>window.onload = function(){ window.focus(); setTimeout(()=>{ window.print(); }, 300); };</script>
+          </body>
+        </html>
+      `;
+
+      const w = window.open('', '_blank');
+      if (!w) {
+        alert('Unable to open new window. Please allow popups for this site to generate the report.');
+        return;
+      }
+      w.document.write(html);
+      w.document.close();
+    } catch (err) {
+      alert('Failed to generate report: ' + String(err?.message || err));
+    }
   };
 
   // Derived listing collections used by the left-menu and dashboard
@@ -1514,58 +1604,42 @@ export default function Dashboard() {
 
                   {/* Grid of stat cards; THEME.cardDark keeps consistent look with other panels */}
           {selectedTab === 'statistics' && !loading && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {(() => {
-                // derive useful statistics for a real-estate photography business
-                const parsed = Array.isArray(statsData) ? statsData.map(s => ({
-                  date: s.date,
-                  shoots: Number(s.shoots_count ?? s.shoots ?? 0),
-                  income: Number(s.income_total ?? s.income ?? 0)
-                })) : [];
-                const days = parsed.length || 30;
-                const totalShoots = parsed.reduce((sum, p) => sum + (p.shoots || 0), 0);
-                const totalIncome = parsed.reduce((sum, p) => sum + (p.income || 0), 0);
-                const avgShootsPerDay = days ? (totalShoots / days) : 0;
-                const avgIncomePerShoot = totalShoots ? (totalIncome / totalShoots) : 0;
-                const totalProperties = Array.isArray(properties) ? properties.length : 0;
-                const soldCount = Array.isArray(properties) ? properties.filter(p => (p.status || '').toLowerCase() === 'sold').length : 0;
-                const soldPercent = totalProperties ? Math.round((soldCount / totalProperties) * 100) : 0;
+            <>
+              <div className="flex justify-end mb-4">
+                <button onClick={generateReport} className={`${THEME.btnPrimary} px-3 py-2 rounded-md`}>Generate PDF Report</button>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className={THEME.cardDark}>
+                  <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">Total shoots (last {statsParsed.length || 30} days)</p>
+                  <p className="text-3xl font-bold mt-3">{statsTotalShoots}</p>
+                  <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Count of completed photo shoots recorded in the statistics table.</p>
+                </div>
 
-                return (
-                  <>
-                    <div className={THEME.cardDark}>
-                      <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">Total shoots (last {parsed.length || 30} days)</p>
-                      <p className="text-3xl font-bold mt-3">{totalShoots}</p>
-                      <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Count of completed photo shoots recorded in the statistics table.</p>
-                    </div>
+                <div className={THEME.cardDark}>
+                  <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">Avg shoots / day</p>
+                  <p className="text-3xl font-bold mt-3">{statsAvgShootsPerDay.toFixed(1)}</p>
+                  <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Average shoots per day over the selected window.</p>
+                </div>
 
-                    <div className={THEME.cardDark}>
-                      <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">Avg shoots / day</p>
-                      <p className="text-3xl font-bold mt-3">{avgShootsPerDay.toFixed(1)}</p>
-                      <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Average shoots per day over the selected window.</p>
-                    </div>
+                <div className={THEME.cardDark}>
+                  <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">Total income (last {statsParsed.length || 30} days)</p>
+                  <p className="text-3xl font-bold mt-3">${Math.round(statsTotalIncome).toLocaleString()}</p>
+                  <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Revenue collected for shoots in the period.</p>
+                </div>
 
-                    <div className={THEME.cardDark}>
-                      <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">Total income (last {parsed.length || 30} days)</p>
-                      <p className="text-3xl font-bold mt-3">${Math.round(totalIncome).toLocaleString()}</p>
-                      <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Revenue collected for shoots in the period.</p>
-                    </div>
+                <div className={THEME.cardDark}>
+                  <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">Avg income per shoot</p>
+                  <p className="text-3xl font-bold mt-3">${statsAvgIncomePerShoot.toFixed(0)}</p>
+                  <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Total income divided by total shoots (useful for pricing decisions).</p>
+                </div>
 
-                    <div className={THEME.cardDark}>
-                      <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">Avg income per shoot</p>
-                      <p className="text-3xl font-bold mt-3">${avgIncomePerShoot.toFixed(0)}</p>
-                      <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Total income divided by total shoots (useful for pricing decisions).</p>
-                    </div>
-
-                    <div className={THEME.cardDark}>
-                      <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">Listings sold %</p>
-                      <p className="text-3xl font-bold mt-3">{soldPercent}%</p>
-                      <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Percent of properties marked Sold (from current properties data).</p>
-                    </div>
-                  </>
-                );
-              })()}
-            </div>
+                <div className={THEME.cardDark}>
+                  <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold">Listings sold %</p>
+                  <p className="text-3xl font-bold mt-3">{(properties?.length ? Math.round((properties.filter(p => (p.status || '').toLowerCase() === 'sold').length / properties.length) * 100) : 0)}%</p>
+                  <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Percent of properties marked Sold (from current properties data).</p>
+                </div>
+              </div>
+            </>
           )}
         </main>
       </div>
