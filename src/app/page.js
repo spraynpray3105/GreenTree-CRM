@@ -95,6 +95,10 @@ export default function Dashboard() {
 
   // Fake statistics (placeholder) — will derive from properties if desired
   const [fakeStats, setFakeStats] = useState({ avgIncomePerMonth: 0, avgListingDays: 0 });
+  // Timeseries stats for dashboard chart
+  const [statsData, setStatsData] = useState([]);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsError, setStatsError] = useState(null);
   // Watcher/sun times UI state
   const [watcherAddress, setWatcherAddress] = useState("");
   const [watcherLoading, setWatcherLoading] = useState(false);
@@ -306,6 +310,41 @@ export default function Dashboard() {
     return () => { mounted = false; };
   }, [ENV_API]);
 
+  // Fetch timeseries statistics for dashboard chart
+  useEffect(() => {
+    let mounted = true;
+    const fetchStats = async () => {
+      setStatsLoading(true);
+      let lastErr = null;
+      for (const base of API_BASE_DEFAULTS) {
+        const url = `${base.replace(/\/$/, "")}/stats/summary?days=30`;
+        try {
+          const res = await fetch(url);
+          if (!res.ok) {
+            lastErr = new Error(`${res.status} ${res.statusText}`);
+            continue;
+          }
+          const data = await res.json();
+          if (!mounted) return;
+          setStatsData(Array.isArray(data) ? data : []);
+          setStatsError(null);
+          setStatsLoading(false);
+          return;
+        } catch (err) {
+          lastErr = err;
+          console.warn(`Failed to fetch stats from ${url}:`, err);
+        }
+      }
+      if (mounted) {
+        setStatsData([]);
+        setStatsError(String(lastErr?.message || lastErr));
+        setStatsLoading(false);
+      }
+    };
+    fetchStats();
+    return () => { mounted = false; };
+  }, [ENV_API]);
+
   // helper to rebuild customers when properties change
   const rebuildCustomersFromProperties = (props) => {
     const seen = new Map();
@@ -328,10 +367,7 @@ export default function Dashboard() {
     );
   };
 
-  const handleEmailEscrow = (e, prop) => {
-    e.stopPropagation();
-    alert(`Emailing escrow for ${prop.address}`);
-  };
+  // Email escrow action removed — simplified dashboard actions.
 
   const openForm = () => {
     setForm({ address: "", status: "Active", price: "", agent: "" });
@@ -855,6 +891,37 @@ export default function Dashboard() {
                 </div>
               </div>
 
+              {/* Timeseries: Average shoots vs income (last 30 days) */}
+              <div className={THEME.cardDark + " mb-6"}>
+                <h3 className="font-semibold mb-2">Average shoots vs income (last 30 days)</h3>
+                {statsLoading ? (
+                  <div className="text-sm text-slate-500">Loading stats…</div>
+                ) : statsError ? (
+                  <div className="text-sm text-red-500">{statsError}</div>
+                ) : (!statsData || statsData.length === 0) ? (
+                  <div className="text-sm text-slate-500">No statistics available yet.</div>
+                ) : (
+                  <div className="space-y-2 text-slate-700 dark:text-slate-300">
+                    {(() => {
+                      const parsed = statsData.map(s => ({ date: s.date, shoots: s.shoots_count ?? s.shoots ?? 0, income: s.income_total ?? s.income ?? 0 }));
+                      const maxShoots = Math.max(1, ...parsed.map(p => p.shoots));
+                      return parsed.map(p => (
+                        <div key={p.date} className="flex items-center gap-2 text-xs">
+                          <div className="w-24">{p.date}</div>
+                          <div className="flex-1">
+                            <div className="h-3 bg-slate-100 dark:bg-[#2b2b2b] rounded overflow-hidden">
+                              <div style={{ width: `${(p.shoots / maxShoots) * 100}%` }} className="h-3 bg-blue-500" />
+                            </div>
+                          </div>
+                          <div className="w-20 text-right">${Math.round(p.income)}</div>
+                        </div>
+                      ));
+                    })()}
+                    <div className="mt-2 text-xs text-slate-500">Blue bar shows relative number of shoots; the right column is total income per day.</div>
+                  </div>
+                )}
+              </div>
+
               {/* Table wrapper (THEME.tableWrapDark provides background, rounding, overflow) */}
               <div className={THEME.tableWrapDark}>
                 <table className="w-full">
@@ -885,15 +952,8 @@ export default function Dashboard() {
                             </span>
                           </td>
                           <td className="p-4 text-right">
-                            {/* Email button shown only for Sold items. Uses THEME.btnAccentGreen */}
-                            {prop.status === 'Sold' && (
-                              <button
-                                onClick={(e) => handleEmailEscrow(e, prop)}
-                                className={`${THEME.btnAccentGreen} px-4 py-1 rounded-md text-sm`}
-                              >
-                                Email Escrow
-                              </button>
-                            )}
+                            {/* Quick actions simplified — no Email Escrow button to keep dashboard focused */}
+                            <div className="text-xs text-slate-500">{prop.status === 'Sold' ? 'Ready to bill' : ''}</div>
                           </td>
                         </tr>
 
@@ -920,13 +980,7 @@ export default function Dashboard() {
                                     View
                                   </button>
 
-                                  {/* Email action uses neutral bg for contrast in dark mode */}
-                                  <button
-                                    onClick={(e) => handleEmailEscrow(e, prop)}
-                                    className="px-4 py-2 bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-slate-100 rounded-md text-sm flex items-center gap-2"
-                                  >
-                                    <Mail size={16} /> Email Escrow
-                                  </button>
+                                  {/* Removed Email Escrow action here to simplify workflow. */}
                                 </div>
                               </div>
                             </td>
@@ -966,12 +1020,6 @@ export default function Dashboard() {
                           className={`flex-1 px-3 py-2 ${THEME.btnPrimary} ${THEME.btnPrimaryDark} text-white rounded-md text-sm`}
                         >
                           View
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleEmailEscrow(e, prop); }}
-                          className="flex-1 px-3 py-2 bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-slate-100 rounded-md text-sm"
-                        >
-                          Email Escrow
                         </button>
                       </div>
                     )}

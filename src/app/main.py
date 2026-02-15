@@ -4,10 +4,10 @@ from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError
 from types import SimpleNamespace
 from pydantic import BaseModel
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import os
 
-from database import SessionLocal, Property, User, Photographer  # ensure Photographer model is available
+from database import SessionLocal, Property, User, Photographer, Statistic  # ensure Photographer + Statistic models are available
 from sun_logic import get_optimal_times
 from geopy.geocoders import Nominatim
 
@@ -21,11 +21,23 @@ from jose import jwt, JWTError
 app = FastAPI()
 
 # CORS: allow credentials so httpOnly cookie auth works from frontend (use restricted origins in prod)
-origins = [
-    "http://localhost:3000",   # dev frontend origin (change if different)
-    "http://localhost:8000",   # optional
-    "https://greentree-crm.onrender.com"  # production frontend
+# CORS: allow credentials so httpOnly cookie auth works from frontend.
+# Use an explicit allowlist. You can set FRONTEND_ORIGINS env var (comma-separated)
+# to add more allowed origins in production (for example Vercel domain).
+default_origins = [
+    "http://localhost:3000",
+    "http://localhost:8000",
+    "https://greentree-crm.onrender.com",
+    # common Vercel hostname used by frontend deploys (add your exact domain if different)
+    "https://green-tree-crm.vercel.app",
 ]
+env_frontends = os.getenv("FRONTEND_ORIGINS")
+if env_frontends:
+    env_list = [s.strip() for s in env_frontends.split(",") if s.strip()]
+    # preserve env-provided origins first, then defaults; remove duplicates
+    origins = list(dict.fromkeys(env_list + default_origins))
+else:
+    origins = default_origins
 
 app.add_middleware(
     CORSMiddleware,
@@ -152,6 +164,7 @@ class PhotographerCreate(BaseModel):
     phone: str | None = None
     company: str | None = None
 
+
 # ----------------------
 # Auth endpoints
 # ----------------------
@@ -237,6 +250,50 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
 @app.get("/me")
 def me(current_user: User = Depends(get_current_user)):
     return {"id": current_user.id, "name": current_user.name, "email": current_user.email}
+
+
+# ----- Statistics models & endpoints -----
+class StatisticCreate(BaseModel):
+    # optional date (YYYY-MM-DD). If omitted, server will use UTC today.
+    date: str | None = None
+    shoots_count: int = 0
+    income_total: float = 0.0
+
+
+@app.post("/stats", status_code=201)
+def create_stat(s: StatisticCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # protected endpoint to record daily stats. Date is optional (YYYY-MM-DD string).
+    try:
+        if s.date:
+            try:
+                d = date.fromisoformat(s.date)
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid date format, expected YYYY-MM-DD")
+        else:
+            d = datetime.utcnow().date()
+
+        stat = Statistic(date=d, shoots_count=int(s.shoots_count), income_total=float(s.income_total))
+        db.add(stat)
+        db.commit()
+        db.refresh(stat)
+        return stat
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/stats/summary")
+def stats_summary(days: int = 30, db: Session = Depends(get_db)):
+    # return timeseries of daily stats for the last `days` days (inclusive).
+    # Fallback to textual select when the `statistics` table doesn't exist yet during rollouts.
+    cutoff = datetime.utcnow().date() - timedelta(days=max(1, days - 1))
+    try:
+        rows = db.query(Statistic).filter(Statistic.date >= cutoff).order_by(Statistic.date).all()
+        return rows
+    except ProgrammingError:
+        db.rollback()
+        rows = db.execute(text("SELECT id, date, shoots_count, income_total, created_at FROM statistics WHERE date >= :cutoff ORDER BY date"), {"cutoff": cutoff}).mappings().all()
+        return [dict(r) for r in rows]
 
 # ----------------------
 # Existing properties endpoints

@@ -4,7 +4,7 @@ load_dotenv()  # load .env before reading DATABASE_URL or SECRET_KEY
 import os
 
 # SQLAlchemy imports for engine, model and session setup
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Date
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -68,6 +68,17 @@ class Photographer(Base):
 
     # reverse relationship to properties
     properties = relationship('Property', back_populates='photographer')
+
+# Statistics table: store daily aggregates for shoots and income so the UI can
+# render historical trends and averages. We keep it minimal and append-only.
+class Statistic(Base):
+    __tablename__ = 'statistics'
+    id = Column(Integer, primary_key=True, index=True)
+    # store the calendar date for the stat (UTC date portion is fine)
+    date = Column(Date, nullable=False, index=True)
+    shoots_count = Column(Integer, default=0)
+    income_total = Column(Float, default=0.0)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 # Recreate tables (will add missing tables/columns). For production use Alembic instead.
 Base.metadata.create_all(bind=engine)
