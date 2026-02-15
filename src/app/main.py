@@ -9,6 +9,7 @@ from database import SessionLocal, Property, User  # ensure User model is define
 from fastapi.middleware.cors import CORSMiddleware
 
 # Security libs
+# use a pure-python, well-supported scheme that accepts long passwords
 from passlib.context import CryptContext
 from jose import jwt, JWTError
 
@@ -40,8 +41,8 @@ def get_db():
 # ----------------------
 # Auth configuration
 # ----------------------
-# use bcrypt_sha256 so very long passwords (or accidental hashes) are pre-hashed safely
-PWD_CTX = CryptContext(schemes=["bcrypt_sha256"], deprecated="auto")
+# Use pbkdf2_sha256 (pure-python, no bcrypt C binding). Accepts long inputs and avoids 72-byte bcrypt limit.
+PWD_CTX = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me")  # set in .env for production
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))  # default 60 minutes (login valid 1 hour)
@@ -58,8 +59,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     try:
         return PWD_CTX.verify(plain_password, hashed_password)
     except (ValueError, TypeError) as exc:
-        # common ValueError: "password cannot be longer than 72 bytes" from bcrypt
-        # or TypeError if plain_password is None — treat as authentication failure
+        # treat as authentication failure
         return False
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
