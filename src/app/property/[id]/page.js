@@ -22,6 +22,7 @@ export default function PropertyDetailPage() {
   const [aiSummary, setAiSummary] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState(null);
+  const [syncing, setSyncing] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
 
   // initialize darkMode from persisted preference or system preference
@@ -261,21 +262,52 @@ export default function PropertyDetailPage() {
 
   const togglePaid = async (setTo) => {
     if (!property) return;
-    const token = localStorage.getItem('access_token');
-    if (!token) {
-      alert('You must be logged in to change paid status');
-      return;
-    }
     setBusy(true);
     try {
-      const url = `${API_BASE_DEFAULTS[0].replace(/\/$/, "")}/properties/${property.id}/paid`;
-      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ paid: !!setTo }) });
-      if (!res.ok) {
-        const txt = await res.text().catch(()=>null);
-        throw new Error(txt || `${res.status} ${res.statusText}`);
+      const token = localStorage.getItem('access_token');
+      let lastErr = null;
+      let success = false;
+      for (const baseRaw of API_BASE_DEFAULTS) {
+        const base = baseRaw.replace(/\/$/, "");
+        const url = `${base}/properties/${property.id}/paid`;
+        try {
+          console.debug('togglePaid: attempting', url, 'setTo', setTo, 'token?', !!token);
+          const headers = { 'Content-Type': 'application/json' };
+          if (token) headers['Authorization'] = `Bearer ${token}`;
+          // prefer Authorization header when possible, but also allow cookie-based auth by sending credentials
+          const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify({ paid: !!setTo }), credentials: token ? 'omit' : 'include' });
+          if (!res.ok) {
+            // if unauthorized and we had a token, try sending credentials as a fallback
+            if (res.status === 401 && token) {
+              try {
+                const res2 = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paid: !!setTo }), credentials: 'include' });
+                if (res2.ok) {
+                  const data2 = await res2.json();
+                  setProperty(prev => ({ ...(prev || {}), paid: data2.paid }));
+                  success = true;
+                  break;
+                }
+              } catch (e) {
+                lastErr = e;
+                continue;
+              }
+            }
+            const txt = await res.text().catch(()=>null);
+            throw new Error(txt || `${res.status} ${res.statusText}`);
+          }
+          const data = await res.json();
+          setProperty(prev => ({ ...(prev || {}), paid: data.paid }));
+          success = true;
+          break;
+        } catch (err) {
+          console.warn('togglePaid attempt failed for', base, err);
+          lastErr = err;
+          continue;
+        }
       }
-      const data = await res.json();
-      setProperty(prev => ({ ...(prev || {}), paid: data.paid }));
+      if (!success) {
+        throw lastErr || new Error('Failed to reach API');
+      }
     } catch (err) {
       alert('Failed to update paid status: ' + String(err?.message || err));
     } finally {
@@ -331,6 +363,52 @@ export default function PropertyDetailPage() {
     }
   };
 
+  // Trigger AI sync for this single property by calling backend /ai/sync with property_ids
+  const handlePropertySync = async () => {
+    if (!property) return;
+    setSyncing(true);
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const token = localStorage.getItem('access_token');
+      const headers = token ? { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
+      let data = null;
+      let lastErr = null;
+      for (const baseRaw of API_BASE_DEFAULTS) {
+        const base = baseRaw.replace(/\/$/, "");
+        const url = `${base}/ai/sync`;
+        try {
+          const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify({ property_ids: [property.id] }) });
+          if (!res.ok) {
+            const txt = await res.text().catch(()=>null);
+            throw new Error(txt || `${res.status} ${res.statusText}`);
+          }
+          data = await res.json();
+          break;
+        } catch (err) {
+          lastErr = err;
+          console.warn('Property sync failed for', url, err);
+        }
+      }
+      if (!data) throw lastErr || new Error('Property sync failed');
+      // Backend returns mapping of property_id -> summary
+      const mine = data ? data[String(property.id)] || data[property.id] : null;
+      if (mine) {
+        setAiSummary(mine);
+        setAiError(null);
+      } else {
+        setAiError('Sync completed but no summary returned for this property.');
+      }
+      alert('Property sync complete.');
+    } catch (err) {
+      console.error('Property sync error', err);
+      setAiError(String(err?.message || err));
+    } finally {
+      setSyncing(false);
+      setAiLoading(false);
+    }
+  };
+
   if (loading) return <div className="p-6">Loading property...</div>;
   if (error) return <div className="p-6 text-red-500">Error: {error}</div>;
   if (!property) return <div className="p-6">Property not found.</div>;
@@ -379,92 +457,99 @@ export default function PropertyDetailPage() {
           <div className="md:flex-1">
             {!isEditing ? (
               <>
-                <h2 className="text-xl font-bold mb-2">{property.address}</h2>
-                <div className="text-sm text-slate-600 dark:text-slate-300 mb-4">Status: <strong>{property.status}</strong></div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <div className="text-xs text-slate-500">Quoted</div>
-                    <div className="font-medium">${Number(property.price || 0).toFixed(2)}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-slate-500">Agent</div>
-                    <div className="font-medium">{property.agent || '—'}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-slate-500">Company</div>
-                    <div className="font-medium">{property.company || '—'}</div>
-                  </div>
-                </div>
-
-                <div className="mt-4">
-                  <div className="text-xs text-slate-500">Photographer</div>
-                  <div className="font-medium">{property.photographer ? (property.photographer.name || property.photographer) : (property.photographer_id ? `#${property.photographer_id}` : '—')}</div>
-                </div>
-
-                {/* AI summary block: shows short AI description and flags status mismatches */}
-                <div className="mt-4">
-                  <div className="text-xs text-slate-500">AI Summary</div>
-                  {aiLoading ? (
-                    <div className="text-sm text-slate-500 mt-1">Checking…</div>
-                  ) : aiError ? (
-                    <div className="text-sm text-red-500 mt-1">{aiError}</div>
-                  ) : aiSummary ? (
-                    <div className="mt-1 text-sm text-slate-700 dark:text-slate-300">
-                      <div>{aiSummary.summary || aiSummary.preview || aiSummary.status || 'No summary available'}</div>
-                      {(() => {
-                        const aiIndicator = (aiSummary.indicator || aiSummary.status || '').toString().toLowerCase();
-                        const stored = (property.status || '').toString().toLowerCase();
-                        if (aiIndicator && stored && aiIndicator !== stored) {
-                          return (
-                            <div className="mt-2 text-xs font-semibold text-green-600">AI indicates "{(aiSummary.indicator || aiSummary.status)}" which differs from stored status "{property.status}"</div>
-                          );
-                        }
-                        return null;
-                      })()}
+                {/* Zone A - Header: Address + Status badge */}
+                <div className="flex items-start justify-between mb-3">
+                  <div className="min-w-0">
+                    <h2 className="text-2xl md:text-3xl font-extrabold leading-tight truncate">{property.address}</h2>
+                    <div className="mt-1">
+                      <div className="inline-block px-2 py-1 rounded-md bg-[#636363] text-white text-sm">{property.company || ''}</div>
                     </div>
-                  ) : (
-                    <div className="text-sm text-slate-500 mt-1">No AI summary available.</div>
-                  )}
+                  </div>
+                  <div className="ml-4 flex-shrink-0">
+                    <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold bg-slate-100 text-slate-800 dark:bg-[#153b2e] dark:text-slate-100 border border-slate-200">{property.status}</span>
+                  </div>
                 </div>
-                {/* Agent contact information (if available) */}
-                <div className="mt-4">
-                  <div className="text-xs text-slate-500">Agent</div>
-                  <div className="font-medium">{property.agent || '—'}</div>
-                  {matchedAgent || property.agent_email || property.agent_phone ? (
-                    <div className="mt-2 text-sm flex gap-6">
-                      <div className="flex flex-col">
-                        <div className="text-xs text-slate-500">Email</div>
-                        <div>
-                            {matchedAgent && matchedAgent.email ? (
-                            <a href={`mailto:${matchedAgent.email}`} className="text-green-400 hover:text-green-400 dark:text-blue-400 dark:hover:text-[#3A6353] underline">{matchedAgent.email}</a>
-                          ) : property.agent_email ? (
-                            <a href={`mailto:${property.agent_email}`} className="text-green-400 hover:text-green-400 dark:text-blue-400 dark:hover:text-[#3A6353] underline">{property.agent_email}</a>
-                          ) : (
-                            <span className="text-slate-500">—</span>
-                          )}
-                        </div>
-                      </div>
 
-                      <div className="flex flex-col">
-                        <div className="text-xs text-slate-500">Phone</div>
-                        <div>
-                          {matchedAgent && matchedAgent.phone ? (
-                            <a href={`tel:${matchedAgent.phone}`} className="text-green-400 hover:text-green-400 dark:text-blue-400 dark:hover:text-[#3A6353] underline">{matchedAgent.phone}</a>
-                          ) : property.agent_phone ? (
-                            <a href={`tel:${property.agent_phone}`} className="text-green-400 hover:text-green-400 dark:text-blue-400 dark:hover:text-[#3A6353] underline">{property.agent_phone}</a>
-                          ) : (
-                            <span className="text-slate-500">—</span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="mt-2 text-sm text-slate-500">No contact information available</div>
-                  )}
+                {/* Zone B - Quick Stats: Price / Photographer */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                  <div>
+                    <div className="text-xs text-slate-500">PRICE</div>
+                    <div className="inline-block px-3 py-2 rounded-md bg-[#636363] text-white text-lg font-semibold">${Number(property.price || 0).toFixed(2)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">PHOTOGRAPHER</div>
+                    <div className="inline-block px-3 py-2 rounded-md bg-[#636363] text-white text-lg font-semibold">{property.photographer ? (property.photographer.name || property.photographer) : (property.photographer_id ? `#${property.photographer_id}` : '—')}</div>
+                  </div>
                 </div>
+
+                {/* Zone C - AI Insight: premium box */}
+                <div className="mt-2 p-4 rounded-lg bg-white dark:bg-[#3a6353] border border-white dark:border-white shadow-sm ring-1 ring-green-50 dark:ring-0 border-l-4 border-white">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs text-white-800">AI Insight</div>
+                    <div className="flex items-center gap-2">
+                      <div className="text-xs text-slate-400">Premium</div>
+                      <button type="button" onClick={handlePropertySync} disabled={syncing} className={`text-xs px-2 py-1 rounded-md border ${syncing ? 'opacity-60 cursor-not-allowed' : 'hover:bg-slate-100 dark:hover:bg-slate-700'} text-slate-700 dark:text-slate-100 border-slate-200 dark:border-slate-600`}>{syncing ? 'Syncing…' : 'Sync'}</button>
+                    </div>
+                  </div>
+                  <div className="mt-2">
+                    {aiLoading ? (
+                      <div className="text-sm text-slate-500">Checking…</div>
+                    ) : aiError ? (
+                      <div className="text-sm text-red-500">{aiError}</div>
+                    ) : aiSummary ? (
+                      <div className="mt-2 p-3 rounded-md bg-[#3a6353] text-white">
+                        <div>{aiSummary.summary || aiSummary.preview || aiSummary.status || 'No summary available'}</div>
+                        {(() => {
+                          const aiIndicator = (aiSummary.indicator || aiSummary.status || '').toString().toLowerCase();
+                          const stored = (property.status || '').toString().toLowerCase();
+                          if (aiIndicator && stored && aiIndicator !== stored) {
+                            return (
+                              <div className="mt-2 text-xs font-semibold text-white">AI indicates "{(aiSummary.indicator || aiSummary.status)}" which differs from stored status "{property.status}"</div>
+                            );
+                          }
+                          return null;
+                        })()}
+                      </div>
+                    ) : (
+                      <div className="text-sm text-slate-500">No AI summary available.</div>
+                    )}
+                  </div>
+                </div>
+                
 
                 <div className="mt-6 flex items-center gap-3">
-                  <div className="text-sm">Paid: <strong>{property.paid ? 'Yes' : 'No'}</strong></div>
+                  <div className="inline-block px-3 py-2 rounded-md bg-[#636363] text-white text-sm">Paid: <strong className="font-semibold">{property.paid ? 'Yes' : 'No'}</strong></div>
+                </div>
+
+                {/* AGENT card */}
+                <div className="mt-4">
+                  <div className="text-xs text-slate-500">AGENT</div>
+                  <div className="mt-2 inline-flex items-start gap-3 px-3 py-2 rounded-md bg-[#636363] border border-[#636363] max-w-[48ch]">
+                    <div className="min-w-0">
+                      <div className="text-lg font-semibold text-white truncate">{property.agent || '—'}</div>
+                      <div className="text-sm text-white truncate">{(matchedAgent && matchedAgent.email) ? (
+                        <>
+                          <span className="text-xs text-slate-200 mr-2">Email</span>
+                          <a href={`mailto:${matchedAgent.email}`} className="underline text-white">{matchedAgent.email}</a>
+                        </>
+                      ) : property.agent_email ? (
+                        <>
+                          <span className="text-xs text-slate-200 mr-2">Email</span>
+                          <a href={`mailto:${property.agent_email}`} className="underline text-white">{property.agent_email}</a>
+                        </>
+                      ) : null}</div>
+                      {(matchedAgent && matchedAgent.phone) || property.agent_phone ? (
+                        <div className="text-sm text-white mt-1">
+                          <span className="text-xs text-slate-200 mr-2">Phone</span>
+                          {(matchedAgent && matchedAgent.phone) ? (
+                            <a href={`tel:${matchedAgent.phone}`} className="underline text-white">{matchedAgent.phone}</a>
+                          ) : (
+                            <a href={`tel:${property.agent_phone}`} className="underline text-white">{property.agent_phone}</a>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
                 </div>
               </>
             ) : (

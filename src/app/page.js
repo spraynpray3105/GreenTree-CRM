@@ -1,6 +1,6 @@
 "use client";
 import React, { useEffect, useState } from "react";
-import { Home, TreeDeciduous, DollarSign, Mail, Search, Moon, Sun, BarChart, Menu, X } from 'lucide-react';
+import { Home, TreeDeciduous, DollarSign, Mail, Search, Moon, Sun, BarChart, Menu, X, MessageSquare } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 export default function Dashboard() {
@@ -467,7 +467,9 @@ export default function Dashboard() {
       for (const base of API_BASE_DEFAULTS) {
         const url = `${base.replace(/\/$/, "")}/stats/summary?days=30`;
         try {
-          const res = await fetch(url);
+          const token = localStorage.getItem("access_token");
+          const headers = token ? { "Authorization": `Bearer ${token}` } : {};
+          const res = await fetch(url, { headers });
           if (!res.ok) {
             lastErr = new Error(`${res.status} ${res.statusText}`);
             continue;
@@ -1058,6 +1060,15 @@ export default function Dashboard() {
               className={`flex items-center gap-3 ${selectedTab === 'listings' ? THEME.tabSelected : THEME.tabDefault}`}
             >
               <Search size={20}/> Listings
+            </a>
+
+            {/* AI Assistant link - routes to its own page */}
+            <a
+              href="/ai-assistant"
+              onClick={(e) => { e.preventDefault(); router.push('/ai-assistant'); }}
+              className={`flex items-center gap-3 ${THEME.tabDefault}`}
+            >
+              <MessageSquare size={20}/> AI Assistant
             </a>
 
             {/* Statistics link */}

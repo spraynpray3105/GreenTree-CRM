@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, status, Response, Request
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, func
 from sqlalchemy.exc import ProgrammingError
 from types import SimpleNamespace
 from pydantic import BaseModel
@@ -10,7 +10,7 @@ import os
 from database import SessionLocal, Property, User, Photographer, Statistic, Agent  # ensure Photographer + Statistic + Agent models are available
 from sun_logic import get_optimal_times
 from geopy.geocoders import Nominatim
-from ai_services import get_property_update, AVAILABLE_MODELS, GEMINI_MODEL
+from ai_services import get_property_update, GROQ_CLIENT, GROQ_MODEL
 import asyncio
 import time
 
@@ -18,12 +18,18 @@ import time
 AI_CACHE: dict = {}
 AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL_SECONDS", "21600"))  # default 6 hours
 
-async def _refresh_ai_cache(address: str):
-    """Background task that refreshes the AI cache for an address."""
+async def _refresh_ai_cache(address: str, user_id: int | None = None):
+    """Background task that refreshes the AI cache for an address.
+
+    If user_id is provided, the cache key will be scoped to that user so
+    summaries are cached per-session. If user_id is None we fall back to the
+    legacy address-only key.
+    """
     try:
         res = await asyncio.to_thread(get_property_update, address)
         if isinstance(res, dict) and not res.get('error'):
-            AI_CACHE[address.lower().strip()] = (res, time.time())
+            key = f"user:{user_id}|addr:{address.lower().strip()}" if user_id is not None else address.lower().strip()
+            AI_CACHE[key] = (res, time.time())
     except Exception:
         # ignore background refresh failures
         pass
@@ -303,7 +309,8 @@ async def ai_summary(address: str, current_user: User = Depends(get_current_user
     """Return a short AI-generated summary for a single property address.
     Uses `ai_services.get_property_update` and returns a compact summary and an indicator.
     """
-    key = address.lower().strip()
+    # Use a per-session cache key so each user's session has its own AI summary cache.
+    key = f"user:{current_user.id}|addr:{address.lower().strip()}"
 
     # Return cached result if fresh
     cached = AI_CACHE.get(key)
@@ -339,30 +346,30 @@ async def ai_summary(address: str, current_user: User = Depends(get_current_user
         # Try calling the blocking helper in a thread with a short timeout
         res = await asyncio.wait_for(asyncio.to_thread(get_property_update, address), timeout=6.0)
     except asyncio.TimeoutError:
-        # schedule a background refresh and return a low-confidence placeholder quickly
-        asyncio.create_task(_refresh_ai_cache(address))
+        # schedule a background refresh (scoped to this user) and return a low-confidence placeholder quickly
+        asyncio.create_task(_refresh_ai_cache(address, user_id=current_user.id))
         return { 'address': address, 'status': 'Unknown', 'sold_date': None, 'confidence': 0.0, 'summary': 'AI summary pending (request timed out); refresh shortly', 'indicator': None }
     except Exception as e:
-        # schedule background refresh and return an error-like placeholder
-        asyncio.create_task(_refresh_ai_cache(address))
+        # schedule background refresh (scoped to this user) and return an error-like placeholder
+        asyncio.create_task(_refresh_ai_cache(address, user_id=current_user.id))
         raise HTTPException(status_code=502, detail=f"AI service error: {str(e)}")
 
     # If the helper indicates quota/rate-limit exhaustion, surface 429 with Retry-After
     if isinstance(res, dict) and res.get('quota_exceeded'):
-        # schedule a background refresh attempt for later
-        asyncio.create_task(_refresh_ai_cache(address))
+        # schedule a background refresh attempt for later (scoped to this user)
+        asyncio.create_task(_refresh_ai_cache(address, user_id=current_user.id))
         retry = res.get('retry_after_seconds') or 60
         raise HTTPException(status_code=429, detail=res.get('error') or 'Quota exceeded', headers={"Retry-After": str(int(retry))})
 
     if isinstance(res, dict) and res.get('error'):
-        # If helper returned an error dict, schedule a refresh and surface helpful message
-        asyncio.create_task(_refresh_ai_cache(address))
+        # If helper returned an error dict, schedule a refresh (scoped to this user) and surface helpful message
+        asyncio.create_task(_refresh_ai_cache(address, user_id=current_user.id))
         raise HTTPException(status_code=502, detail=f"AI service error: {res.get('error')}")
 
     if not isinstance(res, dict):
         raise HTTPException(status_code=500, detail="AI returned unexpected response")
 
-    # store in cache
+    # store in session-scoped cache
     AI_CACHE[key] = (res, time.time())
 
     status = (res.get('status') or '').title() if res.get('status') else 'Unknown'
@@ -427,11 +434,12 @@ async def ai_sync_properties(payload: dict | None = None, current_user: User = D
         addr = getattr(p, 'address', None)
         if not addr:
             return (getattr(p, 'id', addr), { 'error': 'No address' })
-        key = addr.lower().strip()
+        # Use per-session cache key so results are scoped to the requesting user
+        key = f"user:{current_user.id}|addr:{addr.lower().strip()}"
 
         async with semaphore:
             try:
-                # Prefer cached value if recent
+                # Prefer cached value if recent (session-scoped)
                 cached = AI_CACHE.get(key)
                 if cached and (time.time() - cached[1]) < AI_CACHE_TTL:
                     res_obj = cached[0]
@@ -484,7 +492,277 @@ def ai_models(current_user: User = Depends(get_current_user)):
     """Return the list of detected available models and the currently configured model.
     This helps pick an alternative when you hit quota or Model NotFound errors.
     """
-    return {"available_models": AVAILABLE_MODELS or [], "configured_model": GEMINI_MODEL}
+    # Groq-only diagnostics: list whether Groq is enabled and which model is configured
+    return {"groq_enabled": bool(GROQ_CLIENT), "groq_model": GROQ_MODEL if GROQ_CLIENT else None}
+
+
+@app.post("/ai/ask")
+async def ai_ask(payload: dict, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """General question-answer endpoint that can consult the database and use Groq to answer free-text questions.
+
+    Request body: { "question": "..." }
+    Response: { "answer": "..." }
+    """
+    question = None
+    if payload and isinstance(payload, dict):
+        question = payload.get('question') or payload.get('q')
+    if not question:
+        raise HTTPException(status_code=400, detail="Missing 'question' in request body")
+
+    # Quick person lookup: if the user asked about a specific person, try to answer directly from DB
+    try:
+        import re
+        m = re.search(r"who is\s+([\w\s'.-]+)\??", question, re.IGNORECASE)
+        name_query = None
+        if m:
+            name_query = m.group(1).strip()
+        else:
+            # also handle 'tell me about NAME' pattern
+            m2 = re.search(r"tell me about\s+([\w\s'.-]+)\??", question, re.IGNORECASE)
+            if m2:
+                name_query = m2.group(1).strip()
+
+        if name_query:
+            # search agents table first
+            try:
+                row = db.execute(text("SELECT id, name, email, phone FROM agents WHERE lower(name) LIKE :q LIMIT 1"), {"q": f"%{name_query.lower()}%"}).mappings().first()
+                if row:
+                    a = SimpleNamespace(**row)
+                    # count properties for this agent if possible
+                    try:
+                        cnt = db.query(Property).filter((Property.agent == a.name) | (Property.agent_id == a.id)).count()
+                    except Exception:
+                        db.rollback()
+                        cnt_row = db.execute(text("SELECT count(*) as c FROM properties WHERE lower(agent) LIKE :q OR agent_id = :id"), {"q": f"%{name_query.lower()}%", "id": a.id}).mappings().first()
+                        cnt = int(cnt_row['c']) if cnt_row else 0
+                    return { 'answer': f"Agent {a.name}: email {a.email or 'unknown'}, phone {a.phone or 'unknown'}. Associated properties: {cnt}." }
+            except Exception:
+                db.rollback()
+
+            # also check photographers
+            try:
+                row = db.execute(text("SELECT id, name, email, phone FROM photographers WHERE lower(name) LIKE :q LIMIT 1"), {"q": f"%{name_query.lower()}%"}).mappings().first()
+                if row:
+                    p = SimpleNamespace(**row)
+                    return { 'answer': f"Photographer {p.name}: email {p.email or 'unknown'}, phone {p.phone or 'unknown'}." }
+            except Exception:
+                db.rollback()
+
+            # fallback: search users table
+            try:
+                row = db.execute(text("SELECT id, name, email FROM users WHERE lower(name) LIKE :q LIMIT 1"), {"q": f"%{name_query.lower()}%"}).mappings().first()
+                if row:
+                    u = SimpleNamespace(**row)
+                    return { 'answer': f"User {u.name}: email {u.email or 'unknown'}." }
+            except Exception:
+                db.rollback()
+        # continue to normal handling if no person found
+    except Exception:
+        # don't block assistant if lookup fails
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Quick property -> photographer lookup: handle questions like
+    # "Who photographed 123 Main St?" or "Who shot 45 Elm Ave?"
+    try:
+        import re as _re
+        m_addr = _re.search(r"who\s+(?:shot|photographed|took(?: the)? photos (?:for|of)|took photos of)\s+(.+?)\??$", question, _re.IGNORECASE)
+        if m_addr:
+            addr_q = m_addr.group(1).strip()
+            try:
+                row = db.execute(text(
+                    "SELECT properties.address as address, p.id as photographer_id, p.name as photographer_name, p.email as photographer_email, p.phone as photographer_phone "
+                    "FROM properties LEFT JOIN photographers p ON properties.photographer_id = p.id "
+                    "WHERE lower(properties.address) LIKE :q LIMIT 1"
+                ), {"q": f"%{addr_q.lower()}%"}).mappings().first()
+                if row:
+                    pr = SimpleNamespace(**row)
+                    if pr.photographer_name:
+                        return { 'answer': f"Photographer {pr.photographer_name} photographed {pr.address}: email {pr.photographer_email or 'unknown'}, phone {pr.photographer_phone or 'unknown'}." }
+                    else:
+                        return { 'answer': f"No photographer is assigned to {pr.address}." }
+            except Exception:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # gather a small, privacy-minded snapshot of the database scoped to the user's company
+    try:
+        props_q = db.query(Property)
+        if current_user and getattr(current_user, 'company', None):
+            props_q = props_q.filter(Property.company == current_user.company)
+        total_properties = props_q.count()
+        # eager-load photographer relationship when available so we can report who shot each property
+        sample_props = props_q.options().order_by(Property.id.desc()).limit(10).all()
+    except ProgrammingError:
+        db.rollback()
+        # fallback textual queries; include joined photographer fields when possible
+        total_row = db.execute(text("SELECT count(*) as c FROM properties")).mappings().first()
+        total_properties = int(total_row['c']) if total_row else 0
+        rows = db.execute(text(
+            "SELECT properties.id, properties.address, properties.status, properties.price, properties.photographer_id, "
+            "p.name as photographer_name, p.email as photographer_email, p.phone as photographer_phone "
+            "FROM properties LEFT JOIN photographers p ON properties.photographer_id = p.id "
+            "ORDER BY properties.id DESC LIMIT 10"
+        )).mappings().all()
+        sample_props = [ SimpleNamespace(**r) for r in rows ]
+
+    try:
+        agents_q = db.query(Agent)
+        if current_user and getattr(current_user, 'company', None):
+            agents_q = agents_q.filter(Agent.company == current_user.company)
+        agents = agents_q.limit(20).all()
+    except ProgrammingError:
+        db.rollback()
+        rows = db.execute(text("SELECT id, name, email, phone FROM agents LIMIT 20")).mappings().all()
+        agents = [ SimpleNamespace(**r) for r in rows ]
+
+    # also gather photographers so the assistant has access to photographer contacts
+    try:
+        photog_q = db.query(Photographer)
+        if current_user and getattr(current_user, 'company', None):
+            photog_q = photog_q.filter(Photographer.company == current_user.company)
+        photographers = photog_q.limit(20).all()
+    except ProgrammingError:
+        db.rollback()
+        rows = db.execute(text("SELECT id, name, email, phone FROM photographers LIMIT 20")).mappings().all()
+        photographers = [ SimpleNamespace(**r) for r in rows ]
+
+    # Gather recent statistics (last N rows) and simple aggregates
+    stats_rows = []
+    total_shoots = 0
+    # total_income should be calculated from all logged statistics rows (not just the recent snapshot)
+    total_income = 0.0
+    avg_shoots_per_row = 0.0
+    try:
+        stats_q = db.query(Statistic).order_by(Statistic.date.desc())
+        # scope stats to current user's company when present
+        company = getattr(current_user, 'company', None)
+        if company is not None:
+            stats_q = stats_q.filter(Statistic.company == company)
+        stats_q = stats_q.limit(90)
+        stats_rows = stats_q.all()
+        total_shoots = sum(int(getattr(s, 'shoots_count', 0) or 0) for s in stats_rows)
+        # compute total income across all statistics rows in the DB, scoped to company when applicable
+        total_query = db.query(func.coalesce(func.sum(Statistic.income_total), 0.0))
+        if company is not None:
+            total_query = total_query.filter(Statistic.company == company)
+        total_income_all = total_query.scalar() or 0.0
+        total_income = float(total_income_all)
+        avg_shoots_per_row = (total_shoots / len(stats_rows)) if stats_rows else 0.0
+    except ProgrammingError:
+        db.rollback()
+        # textual fallback: include company filter when available
+        if company is not None:
+            rows = db.execute(text("SELECT date, shoots_count, income_total FROM statistics WHERE company = :company ORDER BY date DESC LIMIT 90"), {"company": company}).mappings().all()
+        else:
+            rows = db.execute(text("SELECT date, shoots_count, income_total FROM statistics ORDER BY date DESC LIMIT 90")).mappings().all()
+        stats_rows = [ SimpleNamespace(**r) for r in rows ]
+        total_shoots = sum(int(r.get('shoots_count') or 0) for r in rows)
+        # fallback: compute total income using textual SQL (scoped to company when possible)
+        if company is not None:
+            total_row = db.execute(text("SELECT COALESCE(SUM(income_total),0) as total FROM statistics WHERE company = :company"), {"company": company}).mappings().first()
+        else:
+            total_row = db.execute(text("SELECT COALESCE(SUM(income_total),0) as total FROM statistics")).mappings().first()
+        total_income = float(total_row['total']) if total_row else 0.0
+        avg_shoots_per_row = (total_shoots / len(rows)) if rows else 0.0
+
+    # build a concise context string for the model
+    ctx_lines = []
+    ctx_lines.append(f"Total properties in scope: {total_properties}")
+    if sample_props:
+        ctx_lines.append("Sample properties (most recent):")
+        for p in sample_props:
+            addr = getattr(p, 'address', None) or getattr(p, 'addr', None) or '—'
+            st = getattr(p, 'status', None) or 'Unknown'
+            pr = getattr(p, 'price', None)
+            pr_s = f"${float(pr):,.2f}" if pr is not None and str(pr) != 'None' else '—'
+            # photographer info: prefer ORM relationship, fall back to joined fields
+            phot = None
+            try:
+                phot_obj = getattr(p, 'photographer', None)
+                if phot_obj and getattr(phot_obj, 'name', None):
+                    phot = getattr(phot_obj, 'name')
+            except Exception:
+                phot = None
+            if not phot:
+                phot = getattr(p, 'photographer_name', None) or getattr(p, 'photographer', None) or '—'
+            ctx_lines.append(f"- {addr} | status: {st} | price: {pr_s} | photographer: {phot}")
+    if agents:
+        ctx_lines.append("Agents (name — email — phone):")
+        for a in agents[:20]:
+            name = getattr(a, 'name', getattr(a, 'agent', None)) or '—'
+            email = getattr(a, 'email', None) or '—'
+            phone = getattr(a, 'phone', None) or '—'
+            ctx_lines.append(f"- {name} — {email} — {phone}")
+
+    # include photographers in the prompt context so Groq can answer photographer questions
+    if 'photographers' in locals() and photographers:
+        ctx_lines.append("Photographers (name — email — phone):")
+        for p in photographers[:20]:
+            pname = getattr(p, 'name', None) or '—'
+            pemail = getattr(p, 'email', None) or '—'
+            pphone = getattr(p, 'phone', None) or '—'
+            ctx_lines.append(f"- {pname} — {pemail} — {pphone}")
+
+    # include simple stats summary for model context
+    if stats_rows:
+        ctx_lines.append("Statistics (recent):")
+        ctx_lines.append(f"- total_shoots: {total_shoots}")
+        ctx_lines.append(f"- total_income: ${total_income:,.2f}")
+        ctx_lines.append(f"- avg_shoots_per_period: {avg_shoots_per_row:.2f}")
+
+    context_text = "\n".join(ctx_lines)
+
+    # If Groq not configured, return a simple database-aware answer locally
+    if not GROQ_CLIENT:
+        # Simple heuristics for common questions
+        qlow = question.lower()
+        # quick stats answers
+        if 'shoot' in qlow or 'income' in qlow or 'stat' in qlow or 'average' in qlow:
+            return { 'answer': f"Recent stats: total_shoots={total_shoots}, total_income=${total_income:,.2f}, avg_shoots_per_period={avg_shoots_per_row:.2f}" }
+        if 'how many' in qlow or 'total' in qlow or 'count' in qlow:
+            return { 'answer': f"There are {total_properties} properties in your scoped dataset." }
+        # try to match agent by name
+        for a in agents:
+            if a and getattr(a, 'name', '') and getattr(a, 'name', '').lower() in qlow:
+                return { 'answer': f"Agent {a.name}: email {getattr(a,'email', 'unknown')}, phone {getattr(a,'phone','unknown')}" }
+        # try to match photographer by name as well
+        if 'photographers' in locals():
+            for p in photographers:
+                if p and getattr(p, 'name', '') and getattr(p, 'name', '').lower() in qlow:
+                    return { 'answer': f"Photographer {p.name}: email {getattr(p,'email', 'unknown')}, phone {getattr(p,'phone','unknown')}" }
+        return { 'answer': f"Groq not configured. Context snapshot:\n{context_text}\n\nQuestion: {question}\n\nI couldn't run the LLM but here's the context for debugging." }
+
+    # Build prompt for Groq
+    system_msg = (
+        "You are a helpful assistant. Use the database snapshot provided to answer the user's question. "
+        "If the user asks for contact details, return name, email and phone when available. "
+        "If you cannot find an answer in the data, say you don't see that information. Be concise."
+    )
+    user_msg = f"Database snapshot:\n{context_text}\n\nQuestion: {question}\nAnswer:" 
+
+    try:
+        chat_completion = GROQ_CLIENT.chat.completions.create(
+            messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}],
+            model=GROQ_MODEL,
+        )
+        try:
+            content = chat_completion.choices[0].message.content
+        except Exception:
+            content = getattr(chat_completion, 'text', None) or str(chat_completion)
+        return { 'answer': content }
+    except Exception as e:
+        # fallback: return context and error
+        return { 'error': str(e), 'context': context_text }
 
 
 # ----- Statistics models & endpoints -----
@@ -507,7 +785,7 @@ def create_stat(s: StatisticCreate, current_user: User = Depends(get_current_use
         else:
             d = datetime.utcnow().date()
 
-        stat = Statistic(date=d, shoots_count=int(s.shoots_count), income_total=float(s.income_total))
+        stat = Statistic(date=d, shoots_count=int(s.shoots_count), income_total=float(s.income_total), company=getattr(current_user, 'company', None))
         db.add(stat)
         db.commit()
         db.refresh(stat)
@@ -518,17 +796,52 @@ def create_stat(s: StatisticCreate, current_user: User = Depends(get_current_use
 
 
 @app.get("/stats/summary")
-def stats_summary(days: int = 30, db: Session = Depends(get_db)):
+def stats_summary(days: int = 30, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # return timeseries of daily stats for the last `days` days (inclusive).
     # Fallback to textual select when the `statistics` table doesn't exist yet during rollouts.
     cutoff = datetime.utcnow().date() - timedelta(days=max(1, days - 1))
     try:
-        rows = db.query(Statistic).filter(Statistic.date >= cutoff).order_by(Statistic.date).all()
+        q = db.query(Statistic).filter(Statistic.date >= cutoff)
+        company = getattr(current_user, 'company', None)
+        if company is not None:
+            q = q.filter(Statistic.company == company)
+        rows = q.order_by(Statistic.date).all()
         return rows
     except ProgrammingError:
         db.rollback()
-        rows = db.execute(text("SELECT id, date, shoots_count, income_total, created_at FROM statistics WHERE date >= :cutoff ORDER BY date"), {"cutoff": cutoff}).mappings().all()
+        if getattr(current_user, 'company', None) is not None:
+            rows = db.execute(text("SELECT id, date, shoots_count, income_total, created_at FROM statistics WHERE date >= :cutoff AND company = :company ORDER BY date"), {"cutoff": cutoff, "company": getattr(current_user, 'company', None)}).mappings().all()
+        else:
+            rows = db.execute(text("SELECT id, date, shoots_count, income_total, created_at FROM statistics WHERE date >= :cutoff ORDER BY date"), {"cutoff": cutoff}).mappings().all()
         return [dict(r) for r in rows]
+
+
+    @app.get("/debug/stats_recent")
+    def debug_stats_recent(limit: int = 50, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+        """Developer helper: return recent Statistic rows for the current user's company.
+
+        Protected endpoint for debugging why statistics rows may not be visible to the UI.
+        """
+        try:
+            company = getattr(current_user, 'company', None)
+            q = db.query(Statistic).order_by(Statistic.created_at.desc())
+            if company is not None:
+                q = q.filter(Statistic.company == company)
+            rows = q.limit(limit).all()
+            out = []
+            for r in rows:
+                out.append({
+                    'id': r.id,
+                    'date': r.date.isoformat() if getattr(r, 'date', None) is not None else None,
+                    'shoots_count': int(getattr(r, 'shoots_count', 0) or 0),
+                    'income_total': float(getattr(r, 'income_total', 0.0) or 0.0),
+                    'company': getattr(r, 'company', None),
+                    'created_at': getattr(r, 'created_at', None).isoformat() if getattr(r, 'created_at', None) is not None else None
+                })
+            return { 'user': { 'id': current_user.id, 'name': current_user.name, 'company': company }, 'rows': out }
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=str(e))
 
 # ----------------------
 # Existing properties endpoints
@@ -637,7 +950,54 @@ def set_property_paid(property_id: int, paid_update: PaidUpdate, current_user: U
         prop = q.first()
         if not prop:
             raise HTTPException(status_code=404, detail="Property not found")
-        prop.paid = bool(paid_update.paid)
+        old_paid = bool(prop.paid)
+        new_paid = bool(paid_update.paid)
+
+        # update the property paid flag
+        prop.paid = new_paid
+
+        # When marking paid, create a Statistic entry (one row per paid listing).
+        # When unmarking paid, remove one matching Statistic entry for today if present.
+        try:
+            today = date.today()
+            price_val = float(prop.price or 0.0)
+
+            if not old_paid and new_paid:
+                # Insert one Statistic row representing this property's paid event
+                stat = Statistic(date=today, shoots_count=1, income_total=price_val, company=company)
+                db.add(stat)
+
+            elif old_paid and not new_paid:
+                # Try to remove one Statistic row that most likely matches this property's payment
+                # Prefer an exact match on date and income_total and shoots_count == 1, newest first
+                match_q = db.query(Statistic).filter(
+                    Statistic.date == today,
+                    Statistic.income_total == price_val,
+                    Statistic.shoots_count == 1
+                )
+                if company is not None:
+                    match_q = match_q.filter(Statistic.company == company)
+                match = match_q.order_by(Statistic.created_at.desc()).first()
+
+                if match:
+                    db.delete(match)
+                else:
+                    # Fallback: if no exact per-listing row found, attempt to decrement an aggregate row
+                    agg_q = db.query(Statistic).filter(Statistic.date == today)
+                    if company is not None:
+                        agg_q = agg_q.filter(Statistic.company == company)
+                    agg = agg_q.first()
+                    if agg:
+                        agg.shoots_count = max(0, int((agg.shoots_count or 0) - 1))
+                        agg.income_total = max(0.0, float((agg.income_total or 0.0) - price_val))
+                        db.add(agg)
+        except Exception:
+            # do not block the paid update if stats fail; rollback stat changes if needed
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
         db.add(prop)
         db.commit()
         db.refresh(prop)
@@ -677,7 +1037,41 @@ def update_property(property_id: int, prop_up: PropertyUpdate, current_user: Use
         if prop_up.photographer_id is not None:
             prop.photographer_id = prop_up.photographer_id
         if prop_up.paid is not None:
-            prop.paid = bool(prop_up.paid)
+            old_paid = bool(prop.paid)
+            new_paid = bool(prop_up.paid)
+            prop.paid = new_paid
+            # mirror statistics behavior when paid flag changes via PATCH
+            try:
+                today = date.today()
+                price_val = float(prop.price or 0.0)
+                if not old_paid and new_paid:
+                    stat = Statistic(date=today, shoots_count=1, income_total=price_val, company=company)
+                    db.add(stat)
+                elif old_paid and not new_paid:
+                    match_q = db.query(Statistic).filter(
+                        Statistic.date == today,
+                        Statistic.income_total == price_val,
+                        Statistic.shoots_count == 1
+                    )
+                    if company is not None:
+                        match_q = match_q.filter(Statistic.company == company)
+                    match = match_q.order_by(Statistic.created_at.desc()).first()
+                    if match:
+                        db.delete(match)
+                    else:
+                        agg_q = db.query(Statistic).filter(Statistic.date == today)
+                        if company is not None:
+                            agg_q = agg_q.filter(Statistic.company == company)
+                        agg = agg_q.first()
+                        if agg:
+                            agg.shoots_count = max(0, int((agg.shoots_count or 0) - 1))
+                            agg.income_total = max(0.0, float((agg.income_total or 0.0) - price_val))
+                            db.add(agg)
+            except Exception:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
         if prop_up.image_url is not None:
             prop.image_url = prop_up.image_url
 

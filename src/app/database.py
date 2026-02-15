@@ -92,6 +92,8 @@ class Statistic(Base):
     date = Column(Date, nullable=False, index=True)
     shoots_count = Column(Integer, default=0)
     income_total = Column(Float, default=0.0)
+    # optional company scope so stats can be multi-tenant scoped
+    company = Column(String, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 # Recreate tables (will add missing tables/columns). For production use Alembic instead.
