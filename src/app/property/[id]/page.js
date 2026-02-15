@@ -17,6 +17,8 @@ export default function PropertyDetailPage() {
   const [isEditing, setIsEditing] = useState(false);
   const [form, setForm] = useState(null);
   const [photographers, setPhotographers] = useState([]);
+  const [agents, setAgents] = useState([]);
+  const [matchedAgent, setMatchedAgent] = useState(null);
 
   useEffect(() => {
     let mounted = true;
@@ -69,6 +71,44 @@ export default function PropertyDetailPage() {
     fetchPhotogs();
     return ()=>{ mounted = false };
   }, []);
+
+  useEffect(()=>{
+    // fetch agents for agent contact info (best-effort)
+    let mounted = true;
+    const fetchAgents = async () => {
+      try {
+        const base = API_BASE_DEFAULTS[0].replace(/\/$/, "");
+        const res = await fetch(`${base}/agents`);
+        if (!res.ok) return;
+        const arr = await res.json();
+        if (!mounted) return;
+        setAgents(arr || []);
+      } catch (e) {
+        // ignore
+      }
+    };
+    fetchAgents();
+    return ()=>{ mounted = false };
+  }, []);
+
+  useEffect(()=>{
+    // when we have property and agents loaded, try to resolve contact info from agents table
+    try {
+      if (!property || !Array.isArray(agents) || agents.length === 0) return;
+      // prefer agent_id if present
+      if (property.agent_id) {
+        const a = agents.find(x => Number(x.id) === Number(property.agent_id));
+        if (a) return setMatchedAgent(a);
+      }
+      // fallback: match by name case-insensitive
+      const name = (property.agent || '').toString().trim().toLowerCase();
+      if (!name) return setMatchedAgent(null);
+      const a = agents.find(x => (x.name||'').toString().trim().toLowerCase() === name);
+      setMatchedAgent(a || null);
+    } catch (e) {
+      // ignore
+    }
+  }, [property, agents]);
 
   const togglePaid = async (setTo) => {
     if (!property) return;
@@ -146,25 +186,30 @@ export default function PropertyDetailPage() {
   if (error) return <div className="p-6 text-red-500">Error: {error}</div>;
   if (!property) return <div className="p-6">Property not found.</div>;
   return (
-    <div className="p-6">
+    // Make the page fill the viewport and use flex column so the card can be pushed to the bottom
+    <div className="p-6 min-h-screen flex flex-col">
       <div className="mb-4 flex items-center justify-between">
-        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2">
           <button onClick={() => router.back()} className="px-3 py-1 bg-slate-200 dark:bg-[#1f2937] dark:text-slate-100 rounded-md">← Back</button>
-          <button onClick={handleEditToggle} className={`${"px-3 py-1 rounded-md "+ THEME.btnPrimary}`}>{isEditing ? 'Close' : 'Edit'}</button>
+          {/* Inline primary button classes (THEME not available in this component) */}
+          <button onClick={handleEditToggle} className={`px-3 py-1 rounded-md bg-[#3A6353] text-white dark:bg-[#3A6353] dark:hover:bg-[#4D846F]`}>{isEditing ? 'Close' : 'Edit'}</button>
         </div>
         <div>
           <button onClick={() => { navigator.clipboard?.writeText(window.location.href) }} className="px-3 py-1 bg-slate-100 rounded-md">Copy link</button>
         </div>
       </div>
 
-      <div className="bg-white dark:bg-[#262626] rounded-lg p-6 shadow-sm">
-        <div className="md:flex md:gap-6">
-          <div className="md:w-1/3">
-            {/* Image area */}
+  {/* Make the card grow to fill available vertical space */}
+  <div className="bg-white dark:bg-[#262626] rounded-lg p-6 shadow-sm flex flex-col flex-1 min-h-0">
+        <div className="md:flex md:gap-6 h-full">
+          <div className="md:w-1/2 flex-shrink-0 h-full">
+            {/* Image area - fill the column height */}
             { (property.image_url || property.image || (property.images && property.images[0])) ? (
-              <img src={property.image_url || property.image || property.images[0]} alt="Listing image" className="w-full h-48 object-cover rounded-md mb-4" />
+              <div className="w-full h-full overflow-hidden rounded-md mb-4">
+                <img src={property.image_url || property.image || property.images[0]} alt="Listing image" className="w-full h-full object-cover" />
+              </div>
             ) : (
-              <div className="w-full h-48 bg-slate-100 dark:bg-slate-800 rounded-md flex items-center justify-center text-slate-400 mb-4">No image</div>
+              <div className="w-full h-full bg-slate-100 dark:bg-slate-800 rounded-md flex items-center justify-center text-slate-400 mb-4">No image</div>
             )}
 
             {isEditing && (
@@ -182,7 +227,7 @@ export default function PropertyDetailPage() {
                 <div className="text-sm text-slate-600 dark:text-slate-300 mb-4">Status: <strong>{property.status}</strong></div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
-                    <div className="text-xs text-slate-500">Price</div>
+                    <div className="text-xs text-slate-500">Quoted</div>
                     <div className="font-medium">${Number(property.price || 0).toFixed(2)}</div>
                   </div>
                   <div>
@@ -198,6 +243,28 @@ export default function PropertyDetailPage() {
                 <div className="mt-4">
                   <div className="text-xs text-slate-500">Photographer</div>
                   <div className="font-medium">{property.photographer ? (property.photographer.name || property.photographer) : (property.photographer_id ? `#${property.photographer_id}` : '—')}</div>
+                </div>
+
+                {/* Agent contact information (if available) */}
+                <div className="mt-4">
+                  <div className="text-xs text-slate-500">Agent</div>
+                  <div className="font-medium">{property.agent || '—'}</div>
+                    {matchedAgent || property.agent_email || property.agent_phone ? (
+                      <div className="mt-2 text-sm space-y-1">
+                        {matchedAgent && matchedAgent.email ? (
+                          <div><a href={`mailto:${matchedAgent.email}`} className="text-blue-600 dark:text-blue-400 underline">{matchedAgent.email}</a></div>
+                        ) : property.agent_email ? (
+                          <div><a href={`mailto:${property.agent_email}`} className="text-blue-600 dark:text-blue-400 underline">{property.agent_email}</a></div>
+                        ) : null}
+                        {matchedAgent && matchedAgent.phone ? (
+                          <div><a href={`tel:${matchedAgent.phone}`} className="text-blue-600 dark:text-blue-400 underline">{matchedAgent.phone}</a></div>
+                        ) : property.agent_phone ? (
+                          <div><a href={`tel:${property.agent_phone}`} className="text-blue-600 dark:text-blue-400 underline">{property.agent_phone}</a></div>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <div className="mt-2 text-sm text-slate-500">No contact information available</div>
+                    )}
                 </div>
 
                 <div className="mt-6 flex items-center gap-3">

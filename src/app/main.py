@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from datetime import datetime, timedelta, date
 import os
 
-from database import SessionLocal, Property, User, Photographer, Statistic  # ensure Photographer + Statistic models are available
+from database import SessionLocal, Property, User, Photographer, Statistic, Agent  # ensure Photographer + Statistic + Agent models are available
 from sun_logic import get_optimal_times
 from geopy.geocoders import Nominatim
 
@@ -103,7 +103,7 @@ def find_user_by_id(db: Session, user_id: int):
 # ----------------------
 # Auth configuration
 # ----------------------
-# Use pbkdf2_sha256 (pure-python, no bcrypt C binding). Accepts long inputs and avoids 72-byte bcrypt limit.
+# Use pbkdf2_sha256 (pure-python). Accepts long inputs and avoids 72-byte bcrypt limit.
 PWD_CTX = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me")  # set in .env for production
 ALGORITHM = "HS256"
@@ -172,6 +172,20 @@ class PropertyUpdate(BaseModel):
     image_url: str | None = None
 class PhotographerCreate(BaseModel):
     name: str
+    email: str | None = None
+    phone: str | None = None
+    company: str | None = None
+
+
+class AgentCreate(BaseModel):
+    name: str
+    email: str | None = None
+    phone: str | None = None
+    company: str | None = None
+
+
+class AgentUpdate(BaseModel):
+    name: str | None = None
     email: str | None = None
     phone: str | None = None
     company: str | None = None
@@ -311,39 +325,50 @@ def stats_summary(days: int = 30, db: Session = Depends(get_db)):
 # Existing properties endpoints
 # ----------------------
 @app.get("/properties")
-def get_properties(db: Session = Depends(get_db)):
-    # public read access (change to protected if desired)
-    # Some deployments may not have the latest schema (new columns/FKs).
-    # Try the ORM query first; if the DB raises ProgrammingError (missing column),
-    # fall back to a safe textual select that only references guaranteed columns.
+def get_properties(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # SaaS: only return properties that belong to the current user's company
+    company = getattr(current_user, 'company', None)
     try:
-        return db.query(Property).all()
+        q = db.query(Property)
+        if company is not None:
+            q = q.filter(Property.company == company)
+        return q.all()
     except ProgrammingError:
-        # rollback the failed transaction and run a safe text query
         db.rollback()
-        # try to include `paid` if the column exists; if not, fall back to a select without it
+        # try to include `paid` and `image_url` if the columns exist; if not, fall back to a select
+        # that does not reference `image_url` to remain compatible with older schemas.
         try:
-            rows = db.execute(text("SELECT id, address, status, price, agent, company, paid, image_url FROM properties")).mappings().all()
+            if company is not None:
+                rows = db.execute(text("SELECT id, address, status, price, agent, company, paid, image_url FROM properties WHERE company = :company"), {"company": company}).mappings().all()
+            else:
+                rows = db.execute(text("SELECT id, address, status, price, agent, company, paid, image_url FROM properties")).mappings().all()
             return [dict(r) for r in rows]
         except ProgrammingError:
             db.rollback()
-            rows = db.execute(text("SELECT id, address, status, price, agent, company, image_url FROM properties")).mappings().all()
-            # ensure a `paid` key is present for frontend convenience
+            # final safe fallback: do not reference `image_url` (it may not exist yet)
+            if company is not None:
+                rows = db.execute(text("SELECT id, address, status, price, agent, company FROM properties WHERE company = :company"), {"company": company}).mappings().all()
+            else:
+                rows = db.execute(text("SELECT id, address, status, price, agent, company FROM properties")).mappings().all()
             out = [dict(r) for r in rows]
+            # ensure `paid` and `image_url` keys exist for frontend convenience
             for o in out:
                 o.setdefault('paid', False)
+                o.setdefault('image_url', None)
             return out
 
 @app.post("/properties", status_code=201)
 def create_property(prop_data: PropertyCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # creation requires authentication; you can store current_user.id as created_by if you extend model
+    # ensure created properties are tied to the user's company (SaaS multi-tenant)
+    company = getattr(current_user, 'company', None)
     new_prop = Property(
         address=prop_data.address,
         status=prop_data.status,
         price=prop_data.price,
         agent=prop_data.agent,
         photographer_id=prop_data.photographer_id,
-        company=prop_data.company,
+        company=prop_data.company or company,
         image_url=prop_data.image_url
     )
     db.add(new_prop)
@@ -354,28 +379,40 @@ def create_property(prop_data: PropertyCreate, current_user: User = Depends(get_
 
 # Get a single property by id (public read)
 @app.get("/properties/{property_id}")
-def get_property(property_id: int, db: Session = Depends(get_db)):
+def get_property(property_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # SaaS: only allow viewing properties in the same company
+    company = getattr(current_user, 'company', None)
     try:
-        prop = db.query(Property).filter(Property.id == property_id).first()
+        q = db.query(Property).filter(Property.id == property_id)
+        if company is not None:
+            q = q.filter(Property.company == company)
+        prop = q.first()
         if not prop:
             raise HTTPException(status_code=404, detail="Property not found")
         return prop
     except ProgrammingError:
         db.rollback()
-        # attempt textual selects; first try including `paid`, then without
+        # attempt textual selects; include company constraint when possible
         try:
-            row = db.execute(text("SELECT id, address, status, price, agent, company, photographer_id, paid, image_url FROM properties WHERE id = :id LIMIT 1"), {"id": property_id}).mappings().first()
+            if company is not None:
+                row = db.execute(text("SELECT id, address, status, price, agent, company, photographer_id, paid, image_url FROM properties WHERE id = :id AND company = :company LIMIT 1"), {"id": property_id, "company": company}).mappings().first()
+            else:
+                row = db.execute(text("SELECT id, address, status, price, agent, company, photographer_id, paid, image_url FROM properties WHERE id = :id LIMIT 1"), {"id": property_id}).mappings().first()
             if not row:
                 raise HTTPException(status_code=404, detail="Property not found")
             r = dict(row)
             return r
         except ProgrammingError:
             db.rollback()
-            row = db.execute(text("SELECT id, address, status, price, agent, company, photographer_id, image_url FROM properties WHERE id = :id LIMIT 1"), {"id": property_id}).mappings().first()
+            if company is not None:
+                row = db.execute(text("SELECT id, address, status, price, agent, company, photographer_id FROM properties WHERE id = :id AND company = :company LIMIT 1"), {"id": property_id, "company": company}).mappings().first()
+            else:
+                row = db.execute(text("SELECT id, address, status, price, agent, company, photographer_id FROM properties WHERE id = :id LIMIT 1"), {"id": property_id}).mappings().first()
             if not row:
                 raise HTTPException(status_code=404, detail="Property not found")
             r = dict(row)
             r.setdefault('paid', False)
+            r.setdefault('image_url', None)
             return r
 
 
@@ -383,7 +420,12 @@ def get_property(property_id: int, db: Session = Depends(get_db)):
 @app.post("/properties/{property_id}/paid")
 def set_property_paid(property_id: int, paid_update: PaidUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
-        prop = db.query(Property).filter(Property.id == property_id).first()
+        # ensure property belongs to current user's company
+        company = getattr(current_user, 'company', None)
+        q = db.query(Property).filter(Property.id == property_id)
+        if company is not None:
+            q = q.filter(Property.company == company)
+        prop = q.first()
         if not prop:
             raise HTTPException(status_code=404, detail="Property not found")
         prop.paid = bool(paid_update.paid)
@@ -403,7 +445,12 @@ def set_property_paid(property_id: int, paid_update: PaidUpdate, current_user: U
 @app.patch("/properties/{property_id}")
 def update_property(property_id: int, prop_up: PropertyUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
-        prop = db.query(Property).filter(Property.id == property_id).first()
+        # ensure property belongs to current user's company
+        company = getattr(current_user, 'company', None)
+        q = db.query(Property).filter(Property.id == property_id)
+        if company is not None:
+            q = q.filter(Property.company == company)
+        prop = q.first()
         if not prop:
             raise HTTPException(status_code=404, detail="Property not found")
 
@@ -438,8 +485,21 @@ def update_property(property_id: int, prop_up: PropertyUpdate, current_user: Use
 # Photographers endpoints
 # ----------------------
 @app.get("/photographers")
-def list_photographers(db: Session = Depends(get_db)):
-    return db.query(Photographer).all()
+def list_photographers(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # Only return photographers for the current user's company
+    company = getattr(current_user, 'company', None)
+    try:
+        q = db.query(Photographer)
+        if company is not None:
+            q = q.filter(Photographer.company == company)
+        return q.all()
+    except ProgrammingError:
+        db.rollback()
+        if company is not None:
+            rows = db.execute(text("SELECT id, name, email, phone, company, created_at FROM photographers WHERE company = :company"), {"company": company}).mappings().all()
+        else:
+            rows = db.execute(text("SELECT id, name, email, phone, company, created_at FROM photographers")).mappings().all()
+        return [dict(r) for r in rows]
 
 
 @app.post("/photographers", status_code=201)
@@ -450,7 +510,9 @@ def create_photographer(p: PhotographerCreate, current_user: User = Depends(get_
         exists = db.query(Photographer).filter(Photographer.email == p.email).first()
         if exists:
             raise HTTPException(status_code=400, detail="Photographer with that email already exists")
-    new_p = Photographer(name=p.name, email=p.email, phone=p.phone, company=p.company)
+    # ensure photographer is assigned to the current user's company
+    company = getattr(current_user, 'company', None)
+    new_p = Photographer(name=p.name, email=p.email, phone=p.phone, company=p.company or company)
     db.add(new_p)
     db.commit()
     db.refresh(new_p)
@@ -462,11 +524,111 @@ def delete_photographer(photographer_id: int, current_user: User = Depends(get_c
     ph = db.query(Photographer).filter(Photographer.id == photographer_id).first()
     if not ph:
         raise HTTPException(status_code=404, detail="Photographer not found")
+    # ensure company matches
+    company = getattr(current_user, 'company', None)
+    if company is not None and ph.company != company:
+        raise HTTPException(status_code=404, detail="Photographer not found")
     # optionally reassign or nullify photographer_id on properties that reference this photographer
     props = db.query(Property).filter(Property.photographer_id == ph.id).all()
     for pr in props:
-        pr.photographer_id = None
+        # only clear on properties in same company
+        try:
+            if company is None or pr.company == company:
+                pr.photographer_id = None
+        except Exception:
+            pr.photographer_id = None
     db.delete(ph)
+    db.commit()
+    return {"message": "deleted"}
+
+
+# ----------------------
+# Agents endpoints
+# ----------------------
+@app.get("/agents")
+def list_agents(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # Only return agents for the current user's company
+    company = getattr(current_user, 'company', None)
+    try:
+        q = db.query(Agent)
+        if company is not None:
+            q = q.filter(Agent.company == company)
+        return q.all()
+    except ProgrammingError:
+        db.rollback()
+        if company is not None:
+            rows = db.execute(text("SELECT id, name, email, phone, company, created_at FROM agents WHERE company = :company"), {"company": company}).mappings().all()
+        else:
+            rows = db.execute(text("SELECT id, name, email, phone, company, created_at FROM agents")).mappings().all()
+        return [dict(r) for r in rows]
+
+
+@app.post("/agents", status_code=201)
+def create_agent(a: AgentCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # require auth to create agents
+    if not a.name or not a.name.strip():
+        raise HTTPException(status_code=400, detail="Agent name is required")
+    # basic uniqueness by name (case-insensitive)
+    exists = None
+    try:
+        exists = db.query(Agent).filter(Agent.name.ilike(a.name.strip())).first()
+    except Exception:
+        db.rollback()
+    if exists:
+        raise HTTPException(status_code=400, detail="Agent with that name already exists")
+    # assign to current user's company by default
+    company = getattr(current_user, 'company', None)
+    new_a = Agent(name=a.name.strip(), email=a.email, phone=a.phone, company=a.company or company)
+    db.add(new_a)
+    db.commit()
+    db.refresh(new_a)
+    return new_a
+
+
+@app.get("/agents/{agent_id}")
+def get_agent(agent_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    company = getattr(current_user, 'company', None)
+    ag = db.query(Agent).filter(Agent.id == agent_id).first()
+    if not ag or (company is not None and ag.company != company):
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return ag
+
+
+@app.patch("/agents/{agent_id}")
+def update_agent(agent_id: int, a_up: AgentUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    company = getattr(current_user, 'company', None)
+    ag = db.query(Agent).filter(Agent.id == agent_id).first()
+    if not ag or (company is not None and ag.company != company):
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if a_up.name is not None:
+        ag.name = a_up.name
+    if a_up.email is not None:
+        ag.email = a_up.email
+    if a_up.phone is not None:
+        ag.phone = a_up.phone
+    # always keep agent tied to the user's company
+    ag.company = company or ag.company
+    db.add(ag)
+    db.commit()
+    db.refresh(ag)
+    return ag
+
+
+@app.delete("/agents/{agent_id}")
+def delete_agent(agent_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    company = getattr(current_user, 'company', None)
+    ag = db.query(Agent).filter(Agent.id == agent_id).first()
+    if not ag or (company is not None and ag.company != company):
+        raise HTTPException(status_code=404, detail="Agent not found")
+    # clear agent names on properties that referenced this agent by name, but only within same company
+    props = db.query(Property).filter(Property.agent == ag.name).all()
+    for pr in props:
+        try:
+            if company is None or pr.company == company:
+                pr.agent = None
+        except Exception:
+            pr.agent = None
+    db.delete(ag)
     db.commit()
     return {"message": "deleted"}
 

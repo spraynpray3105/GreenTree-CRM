@@ -1,6 +1,6 @@
 "use client";
 import React, { useEffect, useState } from "react";
-import { Home, DollarSign, Mail, Search, Moon, Sun, BarChart, Menu, X } from 'lucide-react';
+import { Home, TreeDeciduous, DollarSign, Mail, Search, Moon, Sun, BarChart, Menu, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 export default function Dashboard() {
@@ -52,7 +52,8 @@ export default function Dashboard() {
     cardSmallDark: "bg-white dark:bg-[#262626]",
     inputDark: "bg-white dark:bg-[#262626] dark:border-[#0b2b20] text-slate-900 dark:text-slate-100 rounded-md px-3 py-2",
     soldBadge: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
-  activeBadge: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+    pendingBadge: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+    activeBadge: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
   };
 
   // data & UI state
@@ -61,7 +62,7 @@ export default function Dashboard() {
   const [showSidebar, setShowSidebar] = useState(false); // mobile sidebar open/close
   const [expandedIds, setExpandedIds] = useState([]); // expanded rows/cards
   const [properties, setProperties] = useState([]); // properties from DB
-  const [customers, setCustomers] = useState([]); // derived customers list
+  const [agents, setAgents] = useState([]); // agents from backend or derived from properties
   const [photographers, setPhotographers] = useState([]); // photographers from DB
   const [photographersSource, setPhotographersSource] = useState(null);
   const [photographersError, setPhotographersError] = useState(null);
@@ -90,9 +91,9 @@ export default function Dashboard() {
   const [showPhotogForm, setShowPhotogForm] = useState(false);
   const [photogForm, setPhotogForm] = useState({ name: "", email: "", phone: "", company: "" });
 
-  // Customer edit state
-  const [editingCustomer, setEditingCustomer] = useState(null);
-  const [showCustomerEditor, setShowCustomerEditor] = useState(false);
+  // Agent edit state
+  const [editingAgent, setEditingAgent] = useState(null);
+  const [showAgentEditor, setShowAgentEditor] = useState(false);
 
   // Fake statistics (placeholder) — will derive from properties if desired
   const [fakeStats, setFakeStats] = useState({ avgIncomePerMonth: 0, avgListingDays: 0 });
@@ -179,7 +180,7 @@ export default function Dashboard() {
     return () => { mounted = false; };
   }, []);
 
-  // Fetch properties from API and derive customers + simple stats
+  // Fetch properties from API and derive agents + simple stats
   useEffect(() => {
     let mounted = true;
     const fetchProperties = async () => {
@@ -241,7 +242,7 @@ export default function Dashboard() {
   // if photographers are present on returned properties, keep them in sync lightly
   // (we also fetch photographers separately below)
 
-        // derive customers from unique agent names
+        // derive agents from unique agent names as a lightweight fallback when no agents table exists
         const seen = new Map();
         data.forEach(p => {
           const name = (p.agent || "").trim();
@@ -251,7 +252,8 @@ export default function Dashboard() {
             seen.set(key, { id: seen.size + 1, name, email: "", phone: "", company: "" });
           }
         });
-        setCustomers(Array.from(seen.values()));
+        // prefer agents from the dedicated agents endpoint (fetched separately). If that is empty, use this derived list.
+        setAgents(prev => (prev && prev.length ? prev : Array.from(seen.values())));
 
         // derive simple stats for display
         const totalIncome = data.reduce((s, p) => s + (p.price || 0), 0);
@@ -340,6 +342,37 @@ export default function Dashboard() {
     return () => { mounted = false; };
   }, [ENV_API]);
 
+  // Fetch agents from API (separate endpoint). This powers the Agents tab and the agent editor.
+  useEffect(() => {
+    if (loadingMe) return; // wait for auth check
+    let mounted = true;
+    const fetchAgents = async () => {
+      let lastErr = null;
+      for (const base of API_BASE_DEFAULTS) {
+        const url = `${base.replace(/\/$/, "")}/agents`;
+        try {
+          const token = localStorage.getItem("access_token");
+          const headers = token ? { "Authorization": `Bearer ${token}` } : {};
+          const res = await fetch(url, { headers });
+          if (!res.ok) {
+            lastErr = new Error(`${res.status} ${res.statusText}`);
+            continue;
+          }
+          const data = await res.json();
+          if (!mounted) return;
+          setAgents(Array.isArray(data) ? data : []);
+          return;
+        } catch (err) {
+          lastErr = err;
+          console.warn(`Failed to fetch agents from ${url}:`, err);
+        }
+      }
+      if (mounted) console.warn('Agents fetch failed:', lastErr);
+    };
+    fetchAgents();
+    return () => { mounted = false; };
+  }, [ENV_API, loadingMe]);
+
   // Fetch timeseries statistics for dashboard chart
   useEffect(() => {
     let mounted = true;
@@ -375,8 +408,8 @@ export default function Dashboard() {
     return () => { mounted = false; };
   }, [ENV_API]);
 
-  // helper to rebuild customers when properties change
-  const rebuildCustomersFromProperties = (props) => {
+  // helper to rebuild agents (fallback) when properties change
+  const rebuildAgentsFromProperties = (props) => {
     const seen = new Map();
     props.forEach(p => {
       const name = (p.agent || "").trim();
@@ -386,7 +419,75 @@ export default function Dashboard() {
         seen.set(key, { id: seen.size + 1, name, email: "", phone: "", company: "" });
       }
     });
-    setCustomers(Array.from(seen.values()));
+    setAgents(prev => (prev && prev.length ? prev : Array.from(seen.values())));
+  };
+
+  // --- Agents CRUD helpers (frontend) ---
+  const openEditAgent = (a) => {
+    // keep a copy and store original name to update properties when renamed
+    setEditingAgent({ ...a, _origName: a?.name });
+    setShowAgentEditor(true);
+  };
+
+  const closeEditAgent = () => {
+    setEditingAgent(null);
+    setShowAgentEditor(false);
+  };
+
+  const handleAgentChange = (e) => {
+    const { name, value } = e.target;
+    setEditingAgent(prev => ({ ...(prev || {}), [name]: value }));
+  };
+
+  const handleSaveAgent = async (e) => {
+    e && e.preventDefault && e.preventDefault();
+    if (!editingAgent) return;
+    const token = localStorage.getItem('access_token');
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    try {
+      if (editingAgent.id) {
+        // update
+        const res = await fetch(`${API_BASE}/agents/${editingAgent.id}`, { method: 'PATCH', headers, body: JSON.stringify({ name: editingAgent.name, email: editingAgent.email, phone: editingAgent.phone, company: editingAgent.company }) });
+        if (!res.ok) throw new Error(`Update failed ${res.status}`);
+        const updated = await res.json();
+        setAgents(prev => prev.map(a => a.id === updated.id ? updated : a));
+        // update properties that referenced the original agent name
+        if (editingAgent._origName && editingAgent._origName !== updated.name) {
+          setProperties(prev => prev.map(p => (p.agent && p.agent.toLowerCase() === (editingAgent._origName||'').toLowerCase() ? { ...p, agent: updated.name } : p)));
+        }
+      } else {
+        // create
+        const res = await fetch(`${API_BASE}/agents`, { method: 'POST', headers, body: JSON.stringify({ name: editingAgent.name, email: editingAgent.email, phone: editingAgent.phone, company: editingAgent.company }) });
+        if (!res.ok) throw new Error(`Create failed ${res.status}`);
+        const created = await res.json();
+        setAgents(prev => [created, ...prev]);
+      }
+      closeEditAgent();
+    } catch (err) {
+      console.error('Failed to save agent', err);
+      alert('Failed to save agent: ' + String(err?.message || err));
+    }
+  };
+
+  const handleDeleteAgent = async (id) => {
+    if (!confirm('Delete this agent? This will clear the agent name on any matching properties.')) return;
+    const token = localStorage.getItem('access_token');
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    try {
+      const res = await fetch(`${API_BASE}/agents/${id}`, { method: 'DELETE', headers });
+      if (!res.ok) throw new Error(`Delete failed ${res.status}`);
+      const deleted = await res.json().catch(()=>null);
+      const removed = agents.find(a => a.id === id);
+      setAgents(prev => prev.filter(a => a.id !== id));
+      if (removed && removed.name) {
+        setProperties(prev => prev.map(p => (p.agent && p.agent.toLowerCase() === (removed.name||'').toLowerCase() ? { ...p, agent: '' } : p)));
+      }
+    } catch (err) {
+      console.error('Failed to delete agent', err);
+      alert('Failed to delete agent');
+    }
   };
 
   const toggleDarkMode = () => setDarkMode(!darkMode);
@@ -554,42 +655,7 @@ export default function Dashboard() {
     }
   };
 
-  // Customer editor helpers
-  const openEditCustomer = (c) => {
-    // create a shallow copy so editing doesn't mutate list until saved
-    setEditingCustomer({ ...c });
-    setShowCustomerEditor(true);
-  };
-
-  const closeEditCustomer = () => {
-    setEditingCustomer(null);
-    setShowCustomerEditor(false);
-  };
-
-  const handleCustomerChange = (e) => {
-    const { name, value } = e.target;
-    setEditingCustomer(prev => ({ ...prev, [name]: value }));
-  };
-
-  const handleSaveCustomer = (e) => {
-    e.preventDefault();
-    if (!editingCustomer || !editingCustomer.name || !editingCustomer.name.trim()) return alert('Name is required');
-    // Update customers list locally
-    setCustomers(prev => prev.map(c => (c.id === editingCustomer.id ? { ...c, ...editingCustomer } : c)));
-    // Also update properties that referenced this customer by name (best-effort)
-    setProperties(prev => prev.map(p => (p.agent && p.agent.toLowerCase() === editingCustomer.name.toLowerCase() ? { ...p, agent: editingCustomer.name } : p)));
-    closeEditCustomer();
-  };
-
-  const handleDeleteCustomer = (id) => {
-    if (!confirm('Delete this customer? This will clear the agent field on any matching properties.')) return;
-    const c = customers.find(x => x.id === id);
-    if (c) {
-      // clear agent references from properties
-      setProperties(prev => prev.map(p => (p.agent && p.agent.toLowerCase() === (c.name || '').toLowerCase() ? { ...p, agent: '' } : p)));
-      setCustomers(prev => prev.filter(x => x.id !== id));
-    }
-  };
+  
 
   // Login handler: receive token in response, store in localStorage and fetch /me with Authorization header
   const handleLogin = async (e) => {
@@ -711,7 +777,7 @@ export default function Dashboard() {
         agent: created.agent || payload.agent
       };
       setProperties(prev => [newProp, ...prev]);
-      rebuildCustomersFromProperties([newProp, ...properties]);
+  rebuildAgentsFromProperties([newProp, ...properties]);
       setShowForm(false);
     } catch (err) {
       console.error("Failed to create property:", err);
@@ -815,10 +881,10 @@ export default function Dashboard() {
           {/* Center area contains app title and current page subtitle */}
             <div className="text-center">
             {/* Header title (uses THEME.headerTitle for typography) */}
-            <div className={THEME.headerTitle}>Green Tree</div>
+              <div className={THEME.headerTitle}>Green Tree</div>
             {/* Small subtitle showing current selected tab */}
             <div className={THEME.headerSubtitle}>
-              {selectedTab === 'dashboard' ? 'Dashboard' : selectedTab === 'customers' ? 'Customers' : selectedTab === 'listings' ? 'Listings' : selectedTab === 'photographers' ? 'Photographers' : selectedTab === 'statistics' ? 'Statistics' : selectedTab === 'watcher' ? 'Watcher' : ''}
+              {selectedTab === 'dashboard' ? 'Dashboard' : selectedTab === 'agents' ? 'Agents' : selectedTab === 'listings' ? 'Listings' : selectedTab === 'photographers' ? 'Photographers' : selectedTab === 'statistics' ? 'Statistics' : selectedTab === 'watcher' ? 'Watcher' : ''}
             </div>
           </div>
 
@@ -839,10 +905,11 @@ export default function Dashboard() {
         <aside className={THEME.sidebarDesktop}>
           {/* Branding/title at top of sidebar */}
           <h1 className={THEME.brandTitle}>
-            <Home size={24} /> Green Tree
+            <TreeDeciduous size={24} className="text-[rgb(58,99,83)] mr-1" />
+            Green Tree
           </h1>
 
-          {/* Navigation links (Dashboard / Customers / Statistics / Watcher) */}
+          {/* Navigation links (Dashboard / Agents / Statistics / Watcher) */}
           <nav className="space-y-4">
             {/* Dashboard link: uses THEME.tabSelected when active, otherwise THEME.tabDefault */}
             <a
@@ -853,13 +920,13 @@ export default function Dashboard() {
               <Home size={20}/> Dashboard
             </a>
 
-            {/* Customers link */}
+            {/* Agents link */}
             <a
               href="#"
-              onClick={(e) => { e.preventDefault(); setSelectedTab('customers'); }}
-              className={`flex items-center gap-3 ${selectedTab === 'customers' ? THEME.tabSelected : THEME.tabDefault}`}
+              onClick={(e) => { e.preventDefault(); setSelectedTab('agents'); }}
+              className={`flex items-center gap-3 ${selectedTab === 'agents' ? THEME.tabSelected : THEME.tabDefault}`}
             >
-              <DollarSign size={20}/> Customers
+              <DollarSign size={20}/> Agents
             </a>
 
             {/* Photographers link */}
@@ -918,7 +985,8 @@ export default function Dashboard() {
             {/* Top row: brand + close button */}
             <div className="flex items-center justify-between mb-6">
               <h2 className={THEME.brandTitle}>
-                <Home size={20} /> Green Tree
+                <TreeDeciduous size={20} className="text-[rgb(58,99,83)] mr-1" />
+                Green Tree
               </h2>
               {/* Close button hides the panel */}
               <button onClick={() => setShowSidebar(false)} className="p-2 rounded-md text-slate-700 dark:text-slate-200"><X /></button>
@@ -936,10 +1004,10 @@ export default function Dashboard() {
 
               <a
                 href="#"
-                onClick={(e) => { e.preventDefault(); setSelectedTab('customers'); setShowSidebar(false); }}
-                className={`flex items-center gap-3 ${selectedTab === 'customers' ? THEME.tabMobileSelected : THEME.tabDefault}`}
+                onClick={(e) => { e.preventDefault(); setSelectedTab('agents'); setShowSidebar(false); }}
+                className={`flex items-center gap-3 ${selectedTab === 'agents' ? THEME.tabMobileSelected : THEME.tabDefault}`}
               >
-                <DollarSign size={18}/> Customers
+                <DollarSign size={18}/> Agents
               </a>
 
               <a
@@ -1003,13 +1071,13 @@ export default function Dashboard() {
             <div>
               {/* Page title and subtitle use THEME.pageTitle / THEME.pageSubtitle */}
               <h2 className={THEME.pageTitle}>
-                {selectedTab === 'dashboard' ? 'Main Dashboard' : selectedTab === 'customers' ? 'Customer Database' : selectedTab === 'listings' ? 'Listings' : selectedTab === 'photographers' ? 'Photographers' : selectedTab === 'statistics' ? 'Statistics' : selectedTab === 'watcher' ? 'Watcher' : ''}
+                {selectedTab === 'dashboard' ? 'Main Dashboard' : selectedTab === 'agents' ? 'Agent Directory' : selectedTab === 'listings' ? 'Listings' : selectedTab === 'photographers' ? 'Photographers' : selectedTab === 'statistics' ? 'Statistics' : selectedTab === 'watcher' ? 'Watcher' : ''}
               </h2>
               <p className={THEME.pageSubtitle}>
                 {selectedTab === 'dashboard'
                   ? `Welcome, ${currentUser?.name || loginForm.name || 'Guest'}. Manage your real estate photography escrow.`
-                  : selectedTab === 'customers'
-                  ? 'Example customer records. Will be connected to MySQL later.'
+                  : selectedTab === 'agents'
+                  ? 'Manage agents and their contact information.'
                   : selectedTab === 'listings'
                   ? 'Search and browse listings.'
                   : selectedTab === 'photographers'
@@ -1027,6 +1095,13 @@ export default function Dashboard() {
                 className={`${THEME.btnPrimary} ${THEME.btnPrimaryDark} px-6 py-2 rounded-lg font-medium`}
               >
                 + Add New Client
+              </button>
+            ) : selectedTab === 'agents' ? (
+              <button
+                onClick={() => { setEditingAgent({ name: '', email: '', phone: '', company: '' }); setShowAgentEditor(true); }}
+                className={`${THEME.btnPrimary} ${THEME.btnPrimaryDark} px-6 py-2 rounded-lg font-medium`}
+              >
+                + Add Agent
               </button>
             ) : null}
           </div>
@@ -1223,7 +1298,7 @@ export default function Dashboard() {
                           <td className="p-4 font-medium">{prop.address}</td>
                           <td className="p-4">
                             {/* Status badge uses THEME.soldBadge or THEME.activeBadge */}
-                            <span className={`px-3 py-1 rounded-full text-xs font-bold ${prop.status === 'Sold' ? THEME.soldBadge : THEME.activeBadge}`}>
+                            <span className={`px-3 py-1 rounded-full text-xs font-bold ${prop.status === 'Sold' ? THEME.soldBadge : (prop.status === 'Pending' ? THEME.pendingBadge : THEME.activeBadge)}`}>
                               {prop.status}
                             </span>
                           </td>
@@ -1283,7 +1358,7 @@ export default function Dashboard() {
                         <div className="text-xs text-slate-500 dark:text-slate-400">{prop.agent}</div>
                       </div>
                       <div className="text-right">
-                        <div className={`px-2 py-1 rounded-full text-xs font-bold ${prop.status === 'Sold' ? THEME.soldBadge : THEME.activeBadge}`}>{prop.status}</div>
+                        <div className={`px-2 py-1 rounded-full text-xs font-bold ${prop.status === 'Sold' ? THEME.soldBadge : (prop.status === 'Pending' ? THEME.pendingBadge : THEME.activeBadge)}`}>{prop.status}</div>
                         <div className="text-sm text-slate-500 dark:text-slate-400 mt-2">${prop.price.toFixed(2)}</div>
                       </div>
                     </div>
@@ -1305,11 +1380,9 @@ export default function Dashboard() {
             </>
           )}
 
-          {/* CUSTOMERS */}
-          {/* Customers view uses THEME.cardDark for consistent panel styling */}
-          {selectedTab === 'customers' && !loading && (
+          {/* AGENTS */}
+          {selectedTab === 'agents' && !loading && (
             <>
-              {/* Desktop table (hidden on mobile) */}
               <div className={THEME.cardDark + " mb-10 hidden md:block"}>
                 <table className="w-full">
                   <thead className={THEME.cardDark}>
@@ -1322,24 +1395,22 @@ export default function Dashboard() {
                     </tr>
                   </thead>
                   <tbody className="divide-y dark:divide-slate-700">
-                    {customers.map(c => (
-                      <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition">
-                        <td className="p-4 font-medium">{c.name}</td>
-                        <td className="p-4 text-slate-600 dark:text-slate-300">{c.email}</td>
-                        <td className="p-4 text-slate-600 dark:text-slate-300">{c.phone}</td>
-                        <td className="p-4 text-slate-600 dark:text-slate-300">{c.company}</td>
+                    {agents.map(a => (
+                      <tr key={a.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition">
+                        <td className="p-4 font-medium">{a.name}</td>
+                        <td className="p-4 text-slate-600 dark:text-slate-300">{a.email}</td>
+                        <td className="p-4 text-slate-600 dark:text-slate-300">{a.phone}</td>
+                        <td className="p-4 text-slate-600 dark:text-slate-300">{a.company}</td>
                         <td className="p-4 text-right">
                           <div className="inline-flex gap-2">
-                            {/* Edit button uses THEME.btnPrimary */}
                             <button
-                              onClick={() => openEditCustomer(c)}
+                              onClick={() => openEditAgent(a)}
                               className={`px-3 py-1 ${THEME.btnPrimary} ${THEME.btnPrimaryDark} text-white rounded-md text-sm`}
                             >
                               Edit
                             </button>
-                            {/* Delete button with clear red visual */}
                             <button
-                              onClick={() => handleDeleteCustomer(c.id)}
+                              onClick={() => handleDeleteAgent(a.id)}
                               className="px-3 py-1 bg-red-500 text-white rounded-md text-sm"
                             >
                               Delete
@@ -1352,24 +1423,23 @@ export default function Dashboard() {
                 </table>
               </div>
 
-              {/* Mobile customer cards */}
               <div className="md:hidden space-y-4">
-                {customers.map(c => (
-                  <article key={c.id} className="bg-white dark:bg-slate-800 rounded-lg p-4 shadow-sm border border-slate-200 dark:border-[#0b2b20]">
+                {agents.map(a => (
+                  <article key={a.id} className="bg-white dark:bg-slate-800 rounded-lg p-4 shadow-sm border border-slate-200 dark:border-[#0b2b20]">
                     <div className="flex justify-between items-center">
                       <div>
-                        <div className="font-medium">{c.name}</div>
-                        <div className="text-xs text-slate-500 dark:text-slate-400">{c.company}</div>
+                        <div className="font-medium">{a.name}</div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400">{a.company}</div>
                       </div>
                       <div className="text-right">
-                        <div className="text-sm text-slate-500 dark:text-slate-400">{c.phone}</div>
-                        <div className="text-xs text-slate-500 dark:text-slate-400">{c.email}</div>
+                        <div className="text-sm text-slate-500 dark:text-slate-400">{a.phone}</div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400">{a.email}</div>
                       </div>
                     </div>
 
                     <div className="mt-3 flex gap-2">
-                      <button onClick={() => openEditCustomer(c)} className={`flex-1 px-3 py-2 ${THEME.btnPrimary} ${THEME.btnPrimaryDark} text-white rounded-md text-sm`}>Edit</button>
-                      <button onClick={() => handleDeleteCustomer(c.id)} className="flex-1 px-3 py-2 bg-red-500 text-white rounded-md text-sm">Delete</button>
+                      <button onClick={() => openEditAgent(a)} className={`flex-1 px-3 py-2 ${THEME.btnPrimary} ${THEME.btnPrimaryDark} text-white rounded-md text-sm`}>Edit</button>
+                      <button onClick={() => handleDeleteAgent(a.id)} className="flex-1 px-3 py-2 bg-red-500 text-white rounded-md text-sm">Delete</button>
                     </div>
                   </article>
                 ))}
@@ -1589,7 +1659,7 @@ export default function Dashboard() {
                               {sortedListings.map(l => (
                                 <tr key={l.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition">
                                   <td className="p-4 font-medium">{l.address}</td>
-                                  <td className="p-4"> <span className={`px-3 py-1 rounded-full text-xs font-bold ${l.status === 'Sold' ? THEME.soldBadge : THEME.activeBadge}`}>{l.status}</span></td>
+                                  <td className="p-4"> <span className={`px-3 py-1 rounded-full text-xs font-bold ${l.status === 'Sold' ? THEME.soldBadge : (l.status === 'Pending' ? THEME.pendingBadge : THEME.activeBadge)}`}>{l.status}</span></td>
                                   <td className="p-4">${Number(l.price || 0).toFixed(2)}</td>
                                   <td className="p-4">{l.paid ? 'Yes' : 'No'}</td>
                                   <td className="p-4 text-right"><button onClick={() => router.push(`/property/${l.id}`)} className={`${THEME.btnPrimary} px-3 py-1 rounded-md`}>View</button></td>
@@ -1749,26 +1819,26 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* CUSTOMER EDITOR MODAL */}
-      {showCustomerEditor && editingCustomer && (
+      {/* AGENT EDITOR MODAL */}
+      {showAgentEditor && editingAgent && (
         <div
           className="fixed inset-0 flex items-center justify-center z-50 p-4"
-          onClick={closeEditCustomer}
+          onClick={closeEditAgent}
         >
           <div className="absolute inset-0 bg-black/40" />
           <form
-            onSubmit={handleSaveCustomer}
+            onSubmit={handleSaveAgent}
             onClick={(e) => e.stopPropagation()}
             className="relative bg-white dark:bg-slate-800 rounded-lg p-6 w-full max-w-md shadow-lg z-10"
           >
-            <h3 className="text-xl font-bold mb-4">Edit Customer</h3>
+            <h3 className="text-xl font-bold mb-4">Edit Agent</h3>
 
             <label className="block mb-2 text-sm">
               <span className="text-slate-600 dark:text-slate-300">Name</span>
               <input
                 name="name"
-                value={editingCustomer.name}
-                onChange={handleCustomerChange}
+                value={editingAgent.name}
+                onChange={handleAgentChange}
                 className={`mt-1 block w-full ${THEME.inputDark}`}
                 required
               />
@@ -1778,8 +1848,8 @@ export default function Dashboard() {
               <span className="text-slate-600 dark:text-slate-300">Email</span>
               <input
                 name="email"
-                value={editingCustomer.email}
-                onChange={handleCustomerChange}
+                value={editingAgent.email}
+                onChange={handleAgentChange}
                 className={`mt-1 block w-full ${THEME.inputDark}`}
               />
             </label>
@@ -1788,8 +1858,8 @@ export default function Dashboard() {
               <span className="text-slate-600 dark:text-slate-300">Phone</span>
               <input
                 name="phone"
-                value={editingCustomer.phone}
-                onChange={handleCustomerChange}
+                value={editingAgent.phone}
+                onChange={handleAgentChange}
                 className={`mt-1 block w-full ${THEME.inputDark}`}
               />
             </label>
@@ -1798,8 +1868,8 @@ export default function Dashboard() {
               <span className="text-slate-600 dark:text-slate-300">Company</span>
               <input
                 name="company"
-                value={editingCustomer.company}
-                onChange={handleCustomerChange}
+                value={editingAgent.company}
+                onChange={handleAgentChange}
                 className={`mt-1 block w-full ${THEME.inputDark}`}
               />
             </label>
@@ -1808,9 +1878,9 @@ export default function Dashboard() {
               <button
                 type="button"
                 onClick={() => {
-                  if (confirm("Delete this customer?")) {
-                    handleDeleteCustomer(editingCustomer.id);
-                    closeEditCustomer();
+                  if (confirm("Delete this agent?")) {
+                    handleDeleteAgent(editingAgent.id);
+                    closeEditAgent();
                   }
                 }}
                 className="px-4 py-2 rounded-md bg-red-500 text-white"
@@ -1821,7 +1891,7 @@ export default function Dashboard() {
               <div className="flex gap-3">
                 <button
                   type="button"
-                  onClick={closeEditCustomer}
+                  onClick={closeEditAgent}
                   className="px-4 py-2 rounded-md bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-slate-100"
                 >
                   Cancel

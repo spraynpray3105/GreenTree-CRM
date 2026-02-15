@@ -73,6 +73,16 @@ class Photographer(Base):
     # reverse relationship to properties
     properties = relationship('Property', back_populates='photographer')
 
+# Agent model: directory of agents with contact info
+class Agent(Base):
+    __tablename__ = 'agents'
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(150), nullable=False, index=True)
+    email = Column(String(255), nullable=True)
+    phone = Column(String(50), nullable=True)
+    company = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 # Statistics table: store daily aggregates for shoots and income so the UI can
 # render historical trends and averages. We keep it minimal and append-only.
 class Statistic(Base):
