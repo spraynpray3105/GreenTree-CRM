@@ -99,6 +99,17 @@ export default function Dashboard() {
   const [statsData, setStatsData] = useState([]);
   const [statsLoading, setStatsLoading] = useState(false);
   const [statsError, setStatsError] = useState(null);
+
+  // Derived monetary metric: total unpaid (estimated value of unsold listings)
+  const totalUnpaid = Array.isArray(properties)
+    ? properties.reduce((sum, p) => {
+        const status = (p.status || '').toString().toLowerCase();
+        // treat anything not sold as unpaid / floating
+        if (status === 'sold') return sum;
+        const price = Number(p.price || 0);
+        return sum + (isNaN(price) ? 0 : price);
+      }, 0)
+    : 0;
   // Watcher/sun times UI state
   const [watcherAddress, setWatcherAddress] = useState("");
   const [watcherLoading, setWatcherLoading] = useState(false);
@@ -888,6 +899,13 @@ export default function Dashboard() {
                 <div className={THEME.cardDark}>
                   <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold text-[rgb(58,99,83)]">READY TO BILL</p>
                   <p className="text-3xl font-bold mt-2">${fakeStats.avgIncomePerMonth.toLocaleString()}</p>
+                  <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Expected to be invoiced / billed.</p>
+                </div>
+
+                <div className={THEME.cardDark}>
+                  <p className="text-slate-500 dark:text-slate-400 text-sm font-semibold text-[rgb(58,99,83)]">TOTAL UNPAID</p>
+                  <p className="text-3xl font-bold mt-2">${totalUnpaid.toLocaleString()}</p>
+                  <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Estimated value of unsold / unpaid listings.</p>
                 </div>
               </div>
 
