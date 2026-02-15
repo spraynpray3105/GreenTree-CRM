@@ -95,6 +95,11 @@ export default function Dashboard() {
 
   // Fake statistics (placeholder) — will derive from properties if desired
   const [fakeStats, setFakeStats] = useState({ avgIncomePerMonth: 0, avgListingDays: 0 });
+  // Watcher/sun times UI state
+  const [watcherAddress, setWatcherAddress] = useState("");
+  const [watcherLoading, setWatcherLoading] = useState(false);
+  const [watcherResult, setWatcherResult] = useState(null);
+  const [watcherError, setWatcherError] = useState(null);
 
   // Responsive: auto-close mobile sidebar when switching to desktop
   useEffect(() => {
@@ -707,7 +712,13 @@ export default function Dashboard() {
             </a>
 
             {/* Static "Watcher" link */}
-            <a href="#" className={`flex items-center gap-3 ${THEME.tabDefault}`}><Search size={20}/> Watcher</a>
+            <a
+              href="#"
+              onClick={(e) => { e.preventDefault(); setSelectedTab('watcher'); }}
+              className={`flex items-center gap-3 ${selectedTab === 'watcher' ? THEME.tabSelected : THEME.tabDefault}`}
+            >
+              <Search size={20}/> Watcher
+            </a>
             
             {/* Dark mode toggle button (in sidebar for convenience) */}
             <button 
@@ -769,7 +780,13 @@ export default function Dashboard() {
                 <BarChart size={18}/> Statistics
               </a>
 
-              <a href="#" className={`flex items-center gap-3 ${THEME.tabDefault}`}><Search size={18}/> Watcher</a>
+              <a
+                href="#"
+                onClick={(e) => { e.preventDefault(); setSelectedTab('watcher'); setShowSidebar(false); }}
+                className={`flex items-center gap-3 ${selectedTab === 'watcher' ? THEME.tabMobileSelected : THEME.tabDefault}`}
+              >
+                <Search size={18}/> Watcher
+              </a>
 
               {/* Mobile dark mode toggle */}
               <button
@@ -1126,6 +1143,99 @@ export default function Dashboard() {
           )}
 
           {/* STATISTICS */}
+          {/* WATCHER (sun times) */}
+          {selectedTab === 'watcher' && !loading && (
+            <div className="mb-6">
+              <div className={THEME.cardDark}>
+                <h3 className="font-semibold mb-3">Sun times / Best windows for photography</h3>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                  <input
+                    placeholder="Enter an address (e.g. 123 Main St, City, State)"
+                    value={watcherAddress}
+                    onChange={(e) => setWatcherAddress(e.target.value)}
+                    className={`${THEME.inputDark} p-2 col-span-2`}
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={async () => {
+                        // trigger calculation (simple loop over bases like other fetchers)
+                        if (!watcherAddress || !watcherAddress.trim()) return alert('Please enter an address');
+                        setWatcherLoading(true);
+                        setWatcherResult(null);
+                        setWatcherError(null);
+                        let lastErr = null;
+                        for (const base of API_BASE_DEFAULTS) {
+                          const url = `${base.replace(/\/$/, '')}/sun?address=${encodeURIComponent(watcherAddress)}`;
+                          try {
+                            const res = await fetch(url);
+                            if (!res.ok) {
+                              lastErr = new Error(`${res.status} ${res.statusText}`);
+                              continue;
+                            }
+                            const data = await res.json();
+                            setWatcherResult(data);
+                            setWatcherError(null);
+                            break;
+                          } catch (err) {
+                            lastErr = err;
+                          }
+                        }
+                        if (!watcherResult && lastErr) setWatcherError(String(lastErr.message || lastErr));
+                        setWatcherLoading(false);
+                      }}
+                      className={`px-4 py-2 rounded-md ${THEME.btnPrimary} ${THEME.btnPrimaryDark} text-white`}
+                    >
+                      {watcherLoading ? 'Working…' : 'Calculate'}
+                    </button>
+                    <button onClick={() => { setWatcherAddress(''); setWatcherResult(null); setWatcherError(null); }} className="px-4 py-2 rounded-md bg-slate-200 dark:bg-slate-700">Clear</button>
+                  </div>
+                </div>
+
+                <div>
+                  {watcherError && <div className="text-red-500">Error: {watcherError}</div>}
+                  {watcherResult && (
+                    <div className="mt-3 text-sm text-slate-700 dark:text-slate-300 space-y-4">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
+                        {/* Lighting Intelligence card */}
+                        <div className="col-span-1 bg-white dark:bg-[#262626] rounded-lg p-4 shadow-sm border dark:border-[#262626]">
+                          <h4 className="font-semibold mb-2">Lighting Intelligence</h4>
+                          <div className="flex items-center gap-4">
+                            {/* Compass */}
+                            <div className="w-20 h-20 rounded-full bg-slate-50 dark:bg-[#333] flex items-center justify-center relative border">
+                              <div className="w-0 h-0 border-l-4 border-r-4 border-b-10 border-l-transparent border-r-transparent border-b-yellow-400 absolute" style={{ transform: `rotate(${(watcherResult.times?.azimuth_deg ?? 0)}deg)` }} />
+                            </div>
+                            <div>
+                              <div className="text-xs text-slate-500">Front-Facing Direction</div>
+                              <div className="font-medium">{watcherResult.times?.front_facing || 'Unknown'}</div>
+                              <div className="text-xs text-slate-500 mt-2">Peak Exterior Light</div>
+                              <div className="font-medium">{watcherResult.times?.golden_hour || watcherResult.times?.sunrise || '—'}</div>
+                            </div>
+                          </div>
+                          <div className="mt-3 text-xs text-amber-700">{watcherResult.times?.shadow_warning}</div>
+                        </div>
+
+                        {/* Raw coordinates & times summary */}
+                        <div className="col-span-2 bg-white dark:bg-[#262626] rounded-lg p-4 shadow-sm border dark:border-[#262626]">
+                          <div><strong>Address:</strong> {watcherResult.address}</div>
+                          <div><strong>Coordinates:</strong> {watcherResult.latitude}, {watcherResult.longitude}</div>
+                          <div className="mt-2">
+                            <strong>Times:</strong>
+                            <ul className="list-disc ml-6 mt-1">
+                              {Object.entries(watcherResult.times || {}).map(([k,v]) => (
+                                <li key={k}><strong>{k}:</strong> {String(v)}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Grid of stat cards; THEME.cardDark keeps consistent look with other panels */}
           {selectedTab === 'statistics' && !loading && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

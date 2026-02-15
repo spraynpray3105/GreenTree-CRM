@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 import os
 
 from database import SessionLocal, Property, User, Photographer  # ensure Photographer model is available
+from sun_logic import get_optimal_times
+from geopy.geocoders import Nominatim
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -305,3 +307,23 @@ def delete_photographer(photographer_id: int, current_user: User = Depends(get_c
     db.delete(ph)
     db.commit()
     return {"message": "deleted"}
+
+
+# ----------------------
+# Sun times / watcher
+# ----------------------
+@app.get("/sun")
+def sun_times(address: str):
+    # Geocode the address using Nominatim (OpenStreetMap). Keep this public-read.
+    try:
+        geolocator = Nominatim(user_agent="greentree_crm")
+        location = geolocator.geocode(address)
+        if not location:
+            raise HTTPException(status_code=404, detail="Address not found")
+        lat, lng = location.latitude, location.longitude
+        times = get_optimal_times(lat, lng)
+        return {"address": address, "latitude": lat, "longitude": lng, "times": times}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
